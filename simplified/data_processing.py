@@ -1,65 +1,75 @@
-"""
-Data Processing — Load Stock CSVs, derive churn, build unified DataFrame.
+# =============================================================================
+# DATA PROCESSING — Load Stock CSVs, derive churn, build unified DataFrame
+# =============================================================================
+#
+# Expected folder structure:
+#   CHURN_2023/  Stock 2023.csv, Stock 2024.csv, Upstreaming.csv
+#   CHURN_2024/  Stock 2024.csv, Stock 2025.csv, Upstreaming.csv
+#   CHURN_2025/  Stock 2025.csv, Stock 2026.csv, Upstreaming.csv
+#
+# Churn logic:
+#   In Stock Y but NOT Stock Y+1 and NOT Upstreaming  →  churned = 1
+#   In Upstreaming                                     →  churned = 0, is_upstreamed = 1
+#   In both Stock Y and Stock Y+1                      →  churned = 0
+#
+# Copy each cell block into your notebook and run them independently.
+# =============================================================================
 
-Expected folder structure (each CHURN_YYYY folder contains 3 CSVs):
-    CHURN_2023/
-        Stock 2023.csv        ← clients at start of 2023
-        Stock 2024.csv        ← clients at start of 2024
-        Upstreaming.csv       ← clients who moved to VIP during 2023
-    CHURN_2024/ ...
-    CHURN_2025/ ...
 
-Each CSV must have a 'client_id' column (other columns are kept as-is).
-
-Churn logic per year:
-    In Stock Y but NOT in Stock Y+1 and NOT in Upstreaming  →  churned = 1
-    In Upstreaming                                           →  churned = 0, is_upstreamed = 1
-    In both Stock Y and Stock Y+1                            →  churned = 0
-"""
+# %% ---- CELL 1: Imports ----
 
 import pandas as pd
 import numpy as np
 from pathlib import Path
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+# %% ---- CELL 2: Config ----
+# Change these paths to match your setup
 
-def _find_csv(folder: Path, candidates: list[str]) -> Path | None:
-    """Return the first existing file from a list of candidate names."""
-    for name in candidates:
-        path = folder / name
-        if path.exists():
-            return path
-    # Fallback: grab the first CSV in the folder
-    csvs = sorted(folder.glob("*.csv")) + sorted(folder.glob("*.CSV"))
-    return csvs[0] if csvs else None
+BASE_PATH = ".."          # directory that contains the CHURN_YYYY folders
+ENCODING  = "utf-8"       # try "latin-1" if you get encoding errors
+YEARS     = [2023, 2024, 2025]  # set to None to auto-detect from folder names
 
 
-def _read_csv(path: Path, encoding: str = "utf-8") -> pd.DataFrame:
-    """Read a CSV with automatic delimiter detection and encoding fallback."""
+# %% ---- CELL 3: Helper — read a CSV with encoding fallback ----
+
+def read_csv_safe(path, encoding="utf-8"):
+    """Read CSV with auto-delimiter detection and encoding fallback."""
     try:
         return pd.read_csv(path, encoding=encoding, sep=None, engine="python")
     except UnicodeDecodeError:
         return pd.read_csv(path, encoding="latin-1", sep=None, engine="python")
 
 
-def _clean_ids(df: pd.DataFrame) -> pd.DataFrame:
-    """Standardise client_id: find column, cast to str, strip, dedupe."""
+# %% ---- CELL 4: Helper — find a file by candidate names ----
+
+def find_csv(folder, candidates):
+    """Return first existing file from candidate list, or first CSV in folder."""
+    folder = Path(folder)
+    for name in candidates:
+        path = folder / name
+        if path.exists():
+            return path
+    csvs = sorted(folder.glob("*.csv")) + sorted(folder.glob("*.CSV"))
+    return csvs[0] if csvs else None
+
+
+# %% ---- CELL 5: Helper — clean client_id column ----
+
+def clean_ids(df):
+    """Find the client_id column, standardise it, deduplicate."""
     df = df.copy()
 
-    # Find the client_id column (case-insensitive)
+    # Find client_id column (case-insensitive, flexible naming)
     id_col = None
     for col in df.columns:
-        if col.strip().lower().replace(" ", "_").replace("-", "_") in (
-            "client_id", "clientid", "id_client", "customer_id", "cust_id",
-            "id", "no_client", "num_client",
-        ):
+        normalised = col.strip().lower().replace(" ", "_").replace("-", "_")
+        if normalised in ("client_id", "clientid", "id_client", "customer_id",
+                          "cust_id", "id", "no_client", "num_client"):
             id_col = col
             break
     if id_col is None:
-        id_col = df.columns[0]  # last resort
+        id_col = df.columns[0]
 
     df = df.rename(columns={id_col: "client_id"})
     df["client_id"] = df["client_id"].astype(str).str.strip()
@@ -68,33 +78,22 @@ def _clean_ids(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-# ---------------------------------------------------------------------------
-# Core: load one year
-# ---------------------------------------------------------------------------
+# %% ---- CELL 6: Load one year — reads 3 CSVs and derives churn ----
 
-def load_year(folder: str | Path, year: int, encoding: str = "utf-8") -> pd.DataFrame:
+def load_year(folder, year, encoding="utf-8"):
     """
-    Load the 3 CSVs for a single year and return one DataFrame with columns:
-        client_id, year, churned, is_upstreamed  (+ any extra Stock columns)
+    Load Stock Y, Stock Y+1, Upstreaming from one CHURN_YYYY folder.
+    Returns a DataFrame with: client_id, year, churned, is_upstreamed + extra cols.
     """
     folder = Path(folder)
 
-    stock_y = _read_csv(
-        _find_csv(folder, [f"Stock {year}.csv", f"Stock_{year}.csv", f"stock {year}.csv"]),
-        encoding,
-    )
-    stock_y1 = _read_csv(
-        _find_csv(folder, [f"Stock {year+1}.csv", f"Stock_{year+1}.csv", f"stock {year+1}.csv"]),
-        encoding,
-    )
-    upstream = _read_csv(
-        _find_csv(folder, ["Upstreaming.csv", "upstreaming.csv"]),
-        encoding,
-    )
+    stock_y_path  = find_csv(folder, [f"Stock {year}.csv",   f"Stock_{year}.csv",   f"stock {year}.csv"])
+    stock_y1_path = find_csv(folder, [f"Stock {year+1}.csv", f"Stock_{year+1}.csv", f"stock {year+1}.csv"])
+    upstream_path = find_csv(folder, ["Upstreaming.csv", "upstreaming.csv"])
 
-    stock_y = _clean_ids(stock_y)
-    stock_y1 = _clean_ids(stock_y1)
-    upstream = _clean_ids(upstream)
+    stock_y  = clean_ids(read_csv_safe(stock_y_path, encoding))
+    stock_y1 = clean_ids(read_csv_safe(stock_y1_path, encoding))
+    upstream = clean_ids(read_csv_safe(upstream_path, encoding))
 
     ids_y1 = set(stock_y1["client_id"])
     ids_up = set(upstream["client_id"])
@@ -114,74 +113,49 @@ def load_year(folder: str | Path, year: int, encoding: str = "utf-8") -> pd.Data
     return result
 
 
-# ---------------------------------------------------------------------------
-# Core: build full dataset
-# ---------------------------------------------------------------------------
+# %% ---- CELL 7: Build full dataset — stack all years ----
 
-def build_dataset(
-    base_path: str | Path = ".",
-    years: list[int] | None = None,
-    encoding: str = "utf-8",
-    output_path: str | None = None,
-) -> pd.DataFrame:
-    """
-    Load all CHURN_YYYY folders, derive churn per year, stack into one DataFrame.
+# Auto-detect years from folder names if YEARS is None
+if YEARS is None:
+    base = Path(BASE_PATH)
+    YEARS = sorted(
+        int(f.name.split("_")[1])
+        for f in base.glob("CHURN_*")
+        if f.is_dir() and f.name.split("_")[1].isdigit()
+    )
 
-    Parameters
-    ----------
-    base_path : directory containing the CHURN_YYYY folders
-    years     : explicit list of years; auto-detected from folder names if None
-    encoding  : CSV encoding ('utf-8' or 'latin-1' for SAP exports)
-    output_path : save merged CSV here (optional)
+print(f"Loading years: {YEARS}\n")
 
-    Returns
-    -------
-    DataFrame with one row per client per year.
-    """
-    base = Path(base_path)
+frames = []
+for y in YEARS:
+    folder = Path(BASE_PATH) / f"CHURN_{y}"
+    frames.append(load_year(folder, y, ENCODING))
 
-    if years is None:
-        years = sorted(
-            int(f.name.split("_")[1])
-            for f in base.glob("CHURN_*")
-            if f.is_dir() and f.name.split("_")[1].isdigit()
-        )
-
-    if not years:
-        raise FileNotFoundError(f"No CHURN_YYYY folders found in {base_path}")
-
-    print(f"Building churn dataset — years: {years}\n")
-
-    frames = [load_year(base / f"CHURN_{y}", y, encoding) for y in years]
-    merged = pd.concat(frames, ignore_index=True)
-
-    # Summary
-    print(f"\n{'='*50}")
-    print(f"  Total rows : {len(merged)} (client-years)")
-    print(f"  Unique IDs : {merged['client_id'].nunique()}")
-    print(f"  Churn rate : {merged['churned'].mean():.2%}")
-    print(f"  Upstreamed : {merged['is_upstreamed'].sum()}")
-    print(f"{'='*50}")
-
-    if output_path:
-        merged.to_csv(output_path, index=False)
-        print(f"  Saved → {output_path}")
-
-    return merged
+df = pd.concat(frames, ignore_index=True)
 
 
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
+# %% ---- CELL 8: Summary ----
 
-if __name__ == "__main__":
-    import argparse
+print(f"\nTotal rows  : {len(df)} (client-years)")
+print(f"Unique IDs  : {df['client_id'].nunique()}")
+print(f"Churn rate  : {df['churned'].mean():.2%}")
+print(f"Upstreamed  : {df['is_upstreamed'].sum()}")
+print(f"Columns     : {list(df.columns)}")
 
-    p = argparse.ArgumentParser(description="Build churn dataset from Stock CSVs")
-    p.add_argument("--base-path", default=".", help="Dir with CHURN_YYYY folders")
-    p.add_argument("--years", nargs="+", type=int, default=None)
-    p.add_argument("--encoding", default="utf-8")
-    p.add_argument("--output", default="churn_dataset.csv")
-    args = p.parse_args()
+df.groupby("year").agg(
+    total=("client_id", "count"),
+    churned=("churned", "sum"),
+    upstreamed=("is_upstreamed", "sum"),
+    churn_rate=("churned", "mean"),
+).reset_index()
 
-    build_dataset(args.base_path, args.years, args.encoding, args.output)
+
+# %% ---- CELL 9: Preview the data ----
+
+df.head(10)
+
+
+# %% ---- CELL 10: Save (optional) ----
+
+# df.to_csv("churn_dataset.csv", index=False)
+# print("Saved to churn_dataset.csv")
