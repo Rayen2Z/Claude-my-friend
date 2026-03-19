@@ -87,7 +87,7 @@ def engineer_retention_features(df: pd.DataFrame) -> pd.DataFrame:
 
 def train_retention_model(
     df: pd.DataFrame,
-    target_col: str = "churned_next_year",
+    target_col: str = None,
     test_size: float = 0.2,
     random_state: int = 42,
 ) -> dict:
@@ -95,6 +95,12 @@ def train_retention_model(
     Train a gradient boosting model to predict retention probability.
 
     The model predicts P(churn), and retention_score = 1 - P(churn).
+
+    Parameters
+    ----------
+    df : DataFrame with churn labels and features
+    target_col : Name of churn column. Auto-detected if None
+        ('churned' from Stock data or 'churned_next_year' from transactions)
 
     Returns
     -------
@@ -108,14 +114,33 @@ def train_retention_model(
     )
     from sklearn.calibration import calibration_curve
 
+    # Auto-detect target column
+    if target_col is None:
+        if "churned" in df.columns:
+            target_col = "churned"
+        elif "churned_next_year" in df.columns:
+            target_col = "churned_next_year"
+        else:
+            raise ValueError("No churn column found. Expected 'churned' or 'churned_next_year'.")
+    print(f"  Target column: {target_col}")
+
+    # Exclude upstreamed clients from training (they are a special case)
+    if "is_upstreamed" in df.columns:
+        n_before = len(df)
+        df = df[df["is_upstreamed"] == 0].copy()
+        n_excluded = n_before - len(df)
+        if n_excluded > 0:
+            print(f"  Excluded {n_excluded} upstreamed clients from training")
+
     # Prepare features
     df = engineer_retention_features(df)
 
     # Select numeric features, exclude target and identifiers
     exclude_cols = {
-        target_col, "client_id", "year", "churn_month", "last_active_month",
+        target_col, "churned", "churned_next_year", "is_upstreamed",
+        "client_id", "year", "churn_month", "last_active_month",
         "start_date", "end_date", "activity_pattern", "segment", "region",
-        "date_of_birth", "account_opening_date",
+        "date_of_birth", "account_opening_date", "still_present_next_year",
     }
     feature_cols = [
         c for c in df.select_dtypes(include=[np.number]).columns

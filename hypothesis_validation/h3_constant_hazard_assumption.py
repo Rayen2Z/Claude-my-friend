@@ -6,14 +6,15 @@
   (exponential survival assumption) or if it varies (suggesting a need for a
   more complex survival model like Weibull or Cox PH).
 
+  Works with Stock-based data (primary) or transaction-based data (fallback).
+
   Checks:
-  1. Compute time-to-churn from account opening date
+  1. Compute year-over-year churn rates — is the rate constant?
   2. Plot empirical survival curve (Kaplan-Meier)
-  3. Compute 1-year churn rate → derive implied constant hazard h = -ln(1 - P_churn)
-  4. Overlay theoretical exponential curve exp(-h*t) on empirical
-  5. Visual check: does churn accelerate or decelerate over time?
-  6. Specific check: year-1 vs year-2 churn rates
-  7. If curves diverge → flag survival model upgrade as V2 priority
+  3. Compute implied constant hazard h = -ln(1 - P_churn)
+  4. Overlay theoretical exponential curve exp(-h*t)
+  5. Year-1 vs year-2 conditional churn rate comparison
+  6. If curves diverge → flag survival model upgrade as V2 priority
 ===============================================================================
 """
 
@@ -25,75 +26,7 @@ from typing import Optional
 
 
 # =============================================================================
-# CHECK 1: Compute time-to-churn
-# =============================================================================
-
-def compute_time_to_churn(
-    transactions_df: pd.DataFrame,
-    churn_df: pd.DataFrame,
-    clients_df: Optional[pd.DataFrame] = None,
-    opening_col: str = "account_opening_date",
-    reference_date: Optional[str] = None,
-) -> pd.DataFrame:
-    """
-    For each client, compute time from account opening (or reference date) to churn.
-    Clients who haven't churned are right-censored at the observation end date.
-
-    Parameters
-    ----------
-    transactions_df : Raw transaction data
-    churn_df : Output from derive_monthly_churn() with churn_month column
-    clients_df : Client demographics with account_opening_date
-    opening_col : Column name for account opening date
-    reference_date : Fixed reference date (e.g., '2023-01-01') if no opening date
-
-    Returns
-    -------
-    DataFrame with columns: client_id, duration_months, event (1=churned, 0=censored)
-    """
-    # Get all unique clients
-    all_clients = transactions_df["client_id"].unique()
-    observation_end = transactions_df["transaction_date"].max()
-
-    records = []
-
-    for client_id in all_clients:
-        # Determine start date
-        if clients_df is not None and opening_col in clients_df.columns:
-            client_info = clients_df[clients_df["client_id"] == client_id]
-            if not client_info.empty:
-                start_date = pd.to_datetime(client_info[opening_col].iloc[0])
-            else:
-                start_date = pd.to_datetime(reference_date or "2023-01-01")
-        else:
-            # Use first transaction as proxy for account opening
-            client_txns = transactions_df[transactions_df["client_id"] == client_id]
-            start_date = client_txns["transaction_date"].min()
-
-        # Determine end date and event
-        churn_record = churn_df[churn_df["client_id"] == client_id]
-        if not churn_record.empty:
-            end_date = pd.to_datetime(churn_record["churn_month"].iloc[0])
-            event = 1  # Churned
-        else:
-            end_date = observation_end
-            event = 0  # Censored (still active)
-
-        duration_months = (end_date - start_date).days / 30.44
-
-        records.append({
-            "client_id": client_id,
-            "start_date": start_date,
-            "end_date": end_date,
-            "duration_months": max(duration_months, 0),
-            "event": event,
-        })
-
-    return pd.DataFrame(records)
-
-
-# =============================================================================
-# CHECK 2: Kaplan-Meier Survival Curve
+# Kaplan-Meier estimator
 # =============================================================================
 
 def kaplan_meier_estimator(
@@ -108,27 +41,20 @@ def kaplan_meier_estimator(
     times : sorted unique event times
     survival : KM survival probability at each time
     """
-    # Sort by duration
     order = np.argsort(duration)
     duration = duration[order]
     event = event[order]
 
     unique_times = np.unique(duration[event == 1])
-    n = len(duration)
-
     survival = []
     times = []
     s = 1.0
 
     for t in unique_times:
-        # Number at risk just before time t
         at_risk = np.sum(duration >= t)
-        # Number of events at time t
         events_at_t = np.sum((duration == t) & (event == 1))
-
         if at_risk > 0:
             s *= (1 - events_at_t / at_risk)
-
         times.append(t)
         survival.append(s)
 
@@ -136,134 +62,193 @@ def kaplan_meier_estimator(
 
 
 # =============================================================================
-# CHECK 3-5: Full constant hazard validation
+# Build survival data from Stock-based churn dataset
+# =============================================================================
+
+def build_survival_from_stocks(
+    churn_df: pd.DataFrame,
+    clients_df: Optional[pd.DataFrame] = None,
+    opening_col: str = "account_opening_date",
+) -> pd.DataFrame:
+    """
+    Build survival data from the Stock-based churn dataset.
+
+    For each client, we track how many years they appear before churning.
+    The "duration" is in years (since we have annual snapshots).
+
+    Parameters
+    ----------
+    churn_df : Output of build_churn_dataset() with columns:
+        client_id, year, churned, is_upstreamed
+    clients_df : Optional client demographics with account_opening_date
+    opening_col : Column name for account opening date
+
+    Returns
+    -------
+    DataFrame: client_id, duration_years, event (1=churned, 0=censored),
+               first_year, last_year
+    """
+    churn_col = "churned" if "churned" in churn_df.columns else "churned_next_year"
+
+    # Exclude upstreamed clients (they are censored, not churned)
+    if "is_upstreamed" in churn_df.columns:
+        df = churn_df[churn_df["is_upstreamed"] == 0].copy()
+    else:
+        df = churn_df.copy()
+
+    records = []
+    for client_id, client_data in df.groupby("client_id"):
+        client_data = client_data.sort_values("year")
+        first_year = client_data["year"].min()
+        last_year = client_data["year"].max()
+        ever_churned = client_data[churn_col].max()
+
+        if ever_churned == 1:
+            # Churned: duration = years from first appearance to churn year
+            churn_year = client_data[client_data[churn_col] == 1]["year"].min()
+            duration = churn_year - first_year + 1  # +1 because they were present that year
+            event = 1
+        else:
+            # Still active: censored at last observation
+            duration = last_year - first_year + 1
+            event = 0
+
+        # If we have account_opening_date, use real tenure
+        if clients_df is not None and opening_col in clients_df.columns:
+            client_info = clients_df[clients_df["client_id"].astype(str) == str(client_id)]
+            if not client_info.empty:
+                open_date = pd.to_datetime(client_info[opening_col].iloc[0])
+                ref_year = churn_year if ever_churned else last_year
+                duration = ref_year - open_date.year
+
+        records.append({
+            "client_id": client_id,
+            "first_year": first_year,
+            "last_year": last_year,
+            "duration_years": max(duration, 1),
+            "event": event,
+        })
+
+    return pd.DataFrame(records)
+
+
+# =============================================================================
+# Main constant hazard validation
 # =============================================================================
 
 def validate_constant_hazard(
     survival_df: pd.DataFrame,
     output_dir: str = "plots",
+    time_unit: str = "years",
 ) -> dict:
     """
-    Core H3 validation:
-    - Plot Kaplan-Meier curve
-    - Compute implied constant hazard from 1-year churn rate
-    - Overlay exponential survival curve
-    - Check alignment
+    Core H3 validation using annual or monthly data.
     """
     Path(output_dir).mkdir(exist_ok=True)
 
-    duration = survival_df["duration_months"].values
+    if "duration_years" in survival_df.columns:
+        duration = survival_df["duration_years"].values
+        unit_label = "years"
+        period_length = 1  # 1 year
+    else:
+        duration = survival_df["duration_months"].values
+        unit_label = "months"
+        period_length = 12
+
     event = survival_df["event"].values
 
     # Kaplan-Meier estimate
     km_times, km_survival = kaplan_meier_estimator(duration, event)
 
-    # Compute 1-year churn rate
+    # Compute 1-period churn rate
     total_clients = len(survival_df)
-    churned_year1 = survival_df[
-        (survival_df["event"] == 1) & (survival_df["duration_months"] <= 12)
+    churned_period1 = survival_df[
+        (survival_df["event"] == 1) & (duration <= period_length)
     ].shape[0]
-    at_risk_year1 = survival_df[survival_df["duration_months"] >= 0].shape[0]
-    p_churn_year1 = churned_year1 / at_risk_year1 if at_risk_year1 > 0 else 0
+    at_risk_period1 = total_clients
+    p_churn_1 = churned_period1 / at_risk_period1 if at_risk_period1 > 0 else 0
 
-    # Implied constant hazard: h = -ln(1 - P_churn) for 12-month period
-    if p_churn_year1 > 0 and p_churn_year1 < 1:
-        h_annual = -np.log(1 - p_churn_year1)
-        h_monthly = h_annual / 12
+    # Implied constant hazard
+    if 0 < p_churn_1 < 1:
+        h = -np.log(1 - p_churn_1)
     else:
-        h_annual = 0
-        h_monthly = 0
+        h = 0
 
-    # Theoretical exponential survival: S(t) = exp(-h * t)
-    t_theory = np.linspace(0, km_times.max() if len(km_times) > 0 else 60, 200)
-    s_theory = np.exp(-h_monthly * t_theory)
+    # Theoretical exponential survival
+    t_theory = np.linspace(0, max(km_times.max() if len(km_times) > 0 else 5, 5), 200)
+    s_theory = np.exp(-h * t_theory)
 
-    # Year-2 conditional churn rate (among those who survived year 1)
-    survived_year1 = survival_df[
-        (survival_df["duration_months"] > 12) | (survival_df["event"] == 0)
+    # Period-2 conditional churn rate
+    survived_p1 = survival_df[
+        (duration > period_length) | (survival_df["event"] == 0)
     ]
-    churned_year2 = survived_year1[
-        (survived_year1["event"] == 1) &
-        (survived_year1["duration_months"] > 12) &
-        (survived_year1["duration_months"] <= 24)
+    churned_p2 = survived_p1[
+        (survived_p1["event"] == 1) &
+        (duration[survived_p1.index] > period_length) &
+        (duration[survived_p1.index] <= 2 * period_length)
     ].shape[0]
-    at_risk_year2 = survived_year1[survived_year1["duration_months"] > 12].shape[0]
-    p_churn_year2 = churned_year2 / at_risk_year2 if at_risk_year2 > 0 else 0
+    at_risk_p2 = survived_p1[duration[survived_p1.index] > period_length].shape[0]
+    p_churn_2 = churned_p2 / at_risk_p2 if at_risk_p2 > 0 else 0
 
-    # Results
+    hazard_ratio = p_churn_2 / p_churn_1 if p_churn_1 > 0 else np.nan
+
     results = {
         "total_clients": total_clients,
-        "p_churn_year1": p_churn_year1,
-        "p_churn_year2_conditional": p_churn_year2,
-        "implied_annual_hazard": h_annual,
-        "implied_monthly_hazard": h_monthly,
-        "hazard_ratio_y2_vs_y1": p_churn_year2 / p_churn_year1 if p_churn_year1 > 0 else np.nan,
+        "p_churn_period1": p_churn_1,
+        "p_churn_period2_conditional": p_churn_2,
+        "implied_hazard": h,
+        "hazard_ratio_p2_vs_p1": hazard_ratio,
     }
 
     print("\n" + "=" * 70)
     print("  H3 — CONSTANT HAZARD ASSUMPTION VALIDATION")
     print("=" * 70)
-
     print(f"\n  Total clients: {total_clients}")
-    print(f"  1-year churn rate (P_churn): {p_churn_year1:.4f} ({p_churn_year1:.2%})")
-    print(f"  Implied constant hazard (annual): h = -ln(1 - {p_churn_year1:.4f}) = {h_annual:.4f}")
-    print(f"  Implied constant hazard (monthly): {h_monthly:.6f}")
-    print(f"\n  Year-2 conditional churn rate: {p_churn_year2:.4f} ({p_churn_year2:.2%})")
-    print(f"  Hazard ratio (Year 2 / Year 1): {results['hazard_ratio_y2_vs_y1']:.3f}")
+    print(f"  Period-1 churn rate: {p_churn_1:.4f} ({p_churn_1:.2%})")
+    print(f"  Implied constant hazard: h = {h:.4f} per {unit_label[:-1]}")
+    print(f"\n  Period-2 conditional churn rate: {p_churn_2:.4f} ({p_churn_2:.2%})")
+    print(f"  Hazard ratio (Period 2 / Period 1): {hazard_ratio:.3f}")
 
-    if abs(results["hazard_ratio_y2_vs_y1"] - 1.0) < 0.15:
+    if np.isnan(hazard_ratio):
+        print("\n  ⚠ Insufficient data to compute hazard ratio.")
+    elif abs(hazard_ratio - 1.0) < 0.15:
         print("\n  ✓ Hazard appears roughly constant (ratio within 15% of 1.0)")
         print("    Exponential survival assumption is reasonable for V1.")
-    elif results["hazard_ratio_y2_vs_y1"] < 0.85:
+    elif hazard_ratio < 0.85:
         print("\n  ⚠ Churn DECELERATES over time (hazard ratio < 0.85)")
-        print("    Clients who survive year 1 are less likely to churn in year 2.")
+        print("    Clients who survive period 1 are less likely to churn later.")
         print("    → Consider Weibull or Cox PH model for V2.")
     else:
         print("\n  ⚠ Churn ACCELERATES over time (hazard ratio > 1.15)")
         print("    Clients become MORE likely to churn as they age.")
         print("    → Consider Weibull or Cox PH model for V2.")
 
-    # =========================================================================
-    # PLOT: Empirical vs Theoretical Survival Curves
-    # =========================================================================
+    # Plot
     fig, axes = plt.subplots(1, 2, figsize=(16, 6))
 
-    # Main survival curve comparison
     ax = axes[0]
     if len(km_times) > 0:
         ax.step(km_times, km_survival, where="post", label="Empirical (Kaplan-Meier)",
                 color="blue", linewidth=2)
-    ax.plot(t_theory, s_theory, "--", label=f"Theoretical exp(-{h_monthly:.4f}·t)",
+    ax.plot(t_theory, s_theory, "--", label=f"Theoretical exp(-{h:.4f}·t)",
             color="red", linewidth=2)
-    ax.set_xlabel("Time (months)")
+    ax.set_xlabel(f"Time ({unit_label})")
     ax.set_ylabel("Survival Probability")
     ax.set_title("H3: Empirical vs Exponential Survival Curve")
     ax.legend()
     ax.set_ylim(0, 1.05)
     ax.grid(True, alpha=0.3)
 
-    # Deviation plot
     ax2 = axes[1]
     if len(km_times) > 0:
-        # Interpolate theoretical at KM times
-        s_theory_at_km = np.exp(-h_monthly * km_times)
+        s_theory_at_km = np.exp(-h * km_times)
         deviation = km_survival - s_theory_at_km
-
-        ax2.bar(km_times, deviation, width=0.5, color="purple", alpha=0.6)
+        ax2.bar(km_times, deviation, width=0.3, color="purple", alpha=0.6)
         ax2.axhline(0, color="black", linestyle="-", linewidth=0.5)
-        ax2.set_xlabel("Time (months)")
+        ax2.set_xlabel(f"Time ({unit_label})")
         ax2.set_ylabel("Deviation (Empirical - Theoretical)")
         ax2.set_title("Deviation from Constant Hazard Assumption")
         ax2.grid(True, alpha=0.3)
-
-        # Annotate if deviation exceeds threshold
-        max_dev = np.max(np.abs(deviation))
-        if max_dev > 0.05:
-            ax2.annotate(
-                f"Max deviation: {max_dev:.3f}",
-                xy=(km_times[np.argmax(np.abs(deviation))], max_dev),
-                fontsize=10, color="red",
-            )
 
     plt.tight_layout()
     plt.savefig(f"{output_dir}/h3_constant_hazard.png", dpi=150, bbox_inches="tight")
@@ -274,110 +259,49 @@ def validate_constant_hazard(
 
 
 # =============================================================================
-# CHECK 6: Cohort-based hazard rates
-# =============================================================================
-
-def check_cohort_hazard_rates(
-    survival_df: pd.DataFrame,
-    output_dir: str = "plots",
-) -> pd.DataFrame:
-    """
-    Compute churn rates by yearly cohorts to see if hazard varies by
-    client vintage.
-    """
-    Path(output_dir).mkdir(exist_ok=True)
-
-    survival_df = survival_df.copy()
-    survival_df["start_year"] = survival_df["start_date"].dt.year
-
-    cohort_stats = []
-    for year in sorted(survival_df["start_year"].unique()):
-        cohort = survival_df[survival_df["start_year"] == year]
-        n = len(cohort)
-        n_churned = cohort["event"].sum()
-        avg_duration = cohort["duration_months"].mean()
-        churn_rate = n_churned / n if n > 0 else 0
-
-        cohort_stats.append({
-            "cohort_year": year,
-            "n_clients": n,
-            "n_churned": n_churned,
-            "churn_rate": churn_rate,
-            "avg_duration_months": avg_duration,
-        })
-
-    cohort_df = pd.DataFrame(cohort_stats)
-
-    print("\n=== Cohort-Based Hazard Rates ===")
-    print(cohort_df.to_string(index=False, float_format="%.3f"))
-
-    # Plot
-    if len(cohort_df) >= 2:
-        fig, ax = plt.subplots(figsize=(8, 5))
-        ax.bar(cohort_df["cohort_year"].astype(str), cohort_df["churn_rate"],
-               color="teal", alpha=0.7)
-        ax.set_xlabel("Cohort Year")
-        ax.set_ylabel("Churn Rate")
-        ax.set_title("Churn Rate by Client Cohort (Vintage)")
-        plt.tight_layout()
-        plt.savefig(f"{output_dir}/h3_cohort_hazard.png", dpi=150, bbox_inches="tight")
-        plt.close()
-
-    return cohort_df
-
-
-# =============================================================================
 # RUN ALL H3 CHECKS
 # =============================================================================
 
-def run_all_h3_checks(
-    transactions_path: str,
-    churn_path: str,
+def run_all_h3_checks_from_stocks(
+    churn_data_path: str,
     clients_path: Optional[str] = None,
     output_dir: str = "plots",
 ) -> dict:
     """
-    Run the full H3 constant hazard assumption validation.
+    Run H3 validation using Stock-based churn data.
 
     Parameters
     ----------
-    transactions_path : Path to raw transaction data CSV
-    churn_path : Path to churn events CSV (output of derive_monthly_churn)
-    clients_path : Path to client demographics CSV (optional)
-    output_dir : Directory for plot output
+    churn_data_path : Path to merged churn CSV (from build_churn_dataset)
+    clients_path : Optional client demographics CSV
+    output_dir : Plot output directory
     """
-    import sys
-    sys.path.insert(0, str(Path(__file__).parent.parent))
-    from data_pipeline.churn_data_pipeline import load_data, derive_monthly_churn
-
-    print("Loading data...")
-    transactions_df = load_data(transactions_path)
-    churn_df = pd.read_csv(churn_path, parse_dates=["churn_month", "last_active_month"])
+    print("Loading churn data...")
+    churn_df = pd.read_csv(churn_data_path)
 
     clients_df = None
     if clients_path:
         clients_df = pd.read_csv(clients_path)
 
-    print("Computing time-to-churn...")
-    survival_df = compute_time_to_churn(
-        transactions_df, churn_df, clients_df
-    )
+    print("Building survival data from annual stocks...")
+    survival_df = build_survival_from_stocks(churn_df, clients_df)
+    print(f"  {len(survival_df)} clients, {survival_df['event'].sum()} churned, "
+          f"{(survival_df['event'] == 0).sum()} censored")
 
     results = {}
     results["constant_hazard"] = validate_constant_hazard(survival_df, output_dir)
-    results["cohort_hazard"] = check_cohort_hazard_rates(survival_df, output_dir)
 
-    # Summary recommendation
-    hr = results["constant_hazard"].get("hazard_ratio_y2_vs_y1", np.nan)
+    # Summary
+    hr = results["constant_hazard"].get("hazard_ratio_p2_vs_p1", np.nan)
     print("\n" + "=" * 70)
     print("  H3 RECOMMENDATION")
     print("=" * 70)
     if np.isnan(hr):
         print("  Insufficient data to evaluate constant hazard assumption.")
+        print("  → Need more years of data for reliable survival analysis.")
     elif abs(hr - 1.0) < 0.15:
         print("  Constant hazard assumption holds reasonably well.")
-        print("  → V1 retention model can use simple exponential survival.")
-        print("  → retention_score = exp(-h * t) is a valid simplification.")
+        print("  → V1 retention model can use: retention_3yr = retention_score^3")
     else:
         print("  Constant hazard assumption is VIOLATED.")
         print("  → V1: Still usable but document the limitation.")
@@ -387,14 +311,90 @@ def run_all_h3_checks(
     return results
 
 
+# Keep backward compatibility for transaction-based usage
+def run_all_h3_checks(
+    transactions_path: str = None,
+    churn_path: str = None,
+    churn_data_path: str = None,
+    clients_path: Optional[str] = None,
+    output_dir: str = "plots",
+) -> dict:
+    """
+    Run H3 checks. Supports both Stock-based and transaction-based data.
+
+    For Stock-based (primary): pass churn_data_path
+    For transaction-based (legacy): pass transactions_path + churn_path
+    """
+    if churn_data_path:
+        return run_all_h3_checks_from_stocks(churn_data_path, clients_path, output_dir)
+
+    # Legacy transaction-based path
+    if not transactions_path or not churn_path:
+        raise ValueError("Provide either churn_data_path (Stock-based) or "
+                         "transactions_path + churn_path (transaction-based)")
+
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent.parent))
+    from data_pipeline.churn_data_pipeline import load_data
+
+    print("Loading data...")
+    transactions_df = load_data(transactions_path)
+    churn_df = pd.read_csv(churn_path, parse_dates=["churn_month", "last_active_month"])
+
+    clients_df = None
+    if clients_path:
+        clients_df = pd.read_csv(clients_path)
+
+    # Build survival from transactions
+    all_clients = transactions_df["client_id"].unique()
+    observation_end = transactions_df["transaction_date"].max()
+    churn_ids = set(churn_df["client_id"].unique())
+
+    records = []
+    for cid in all_clients:
+        client_txns = transactions_df[transactions_df["client_id"] == cid]
+        start = client_txns["transaction_date"].min()
+
+        if cid in churn_ids:
+            end = pd.to_datetime(churn_df[churn_df["client_id"] == cid]["churn_month"].iloc[0])
+            event = 1
+        else:
+            end = observation_end
+            event = 0
+
+        records.append({
+            "client_id": cid,
+            "duration_months": max((end - start).days / 30.44, 0),
+            "event": event,
+            "start_date": start,
+        })
+
+    survival_df = pd.DataFrame(records)
+
+    results = {}
+    results["constant_hazard"] = validate_constant_hazard(survival_df, output_dir, time_unit="months")
+
+    return results
+
+
 if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="H3 Constant Hazard Assumption Validation")
-    parser.add_argument("--transactions", required=True)
-    parser.add_argument("--churn", required=True, help="Path to churn events CSV")
+    parser.add_argument("--churn-data", default=None,
+                        help="[Stock mode] Path to merged churn dataset CSV")
+    parser.add_argument("--transactions", default=None,
+                        help="[Legacy] Path to transactions CSV")
+    parser.add_argument("--churn", default=None,
+                        help="[Legacy] Path to churn events CSV")
     parser.add_argument("--clients", default=None)
     parser.add_argument("--output-dir", default="plots")
     args = parser.parse_args()
 
-    run_all_h3_checks(args.transactions, args.churn, args.clients, args.output_dir)
+    run_all_h3_checks(
+        churn_data_path=args.churn_data,
+        transactions_path=args.transactions,
+        churn_path=args.churn,
+        clients_path=args.clients,
+        output_dir=args.output_dir,
+    )

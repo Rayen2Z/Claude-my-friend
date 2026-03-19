@@ -219,7 +219,12 @@ def check_zero_balance_active(
     Find clients flagged as active (not churned) but with all NBI at zero.
     These may need special handling.
     """
-    active = df[df["churned_next_year"] == 0].copy()
+    churn_col = "churned" if "churned" in df.columns else "churned_next_year"
+    if churn_col not in df.columns:
+        print("\n=== CHECK 5: Zero-Balance Active ===")
+        print("  ⚠ No churn column found. Skipping.")
+        return pd.DataFrame()
+    active = df[df[churn_col] == 0].copy()
 
     nbi_cols = [c for c in df.columns if c.startswith("nbi_q")]
     if not nbi_cols:
@@ -243,6 +248,62 @@ def check_zero_balance_active(
 
 
 # =============================================================================
+# CHECK 6: Stock file consistency (for Stock-based data)
+# =============================================================================
+
+def check_stock_consistency(df: pd.DataFrame) -> dict:
+    """
+    Validate consistency of Stock-based churn data:
+    - Clients flagged as both churned AND upstreamed (should be impossible)
+    - Clients appearing in multiple years with conflicting churn flags
+    - Year-over-year client count trends
+    """
+    churn_col = "churned" if "churned" in df.columns else "churned_next_year"
+    if churn_col not in df.columns:
+        print("\n=== CHECK 6: Stock Consistency ===")
+        print("  ⚠ No churn column found. Skipping.")
+        return {}
+
+    print("\n=== CHECK 6: Stock File Consistency ===")
+    issues = {}
+
+    # Check 1: churned AND upstreamed at the same time
+    if "is_upstreamed" in df.columns:
+        both = df[(df[churn_col] == 1) & (df["is_upstreamed"] == 1)]
+        issues["churned_and_upstreamed"] = len(both)
+        if len(both) > 0:
+            print(f"  ⚠ {len(both)} rows are flagged as BOTH churned AND upstreamed!")
+            print("    These should be mutually exclusive. Review your data.")
+        else:
+            print("  ✓ No clients flagged as both churned and upstreamed.")
+
+    # Check 2: Clients who churned in year Y but reappear in year Y+1
+    years = sorted(df["year"].unique())
+    reappeared = 0
+    for i in range(len(years) - 1):
+        y1, y2 = years[i], years[i + 1]
+        churned_y1 = set(df[(df["year"] == y1) & (df[churn_col] == 1)]["client_id"])
+        present_y2 = set(df[df["year"] == y2]["client_id"])
+        overlap = churned_y1 & present_y2
+        if overlap:
+            reappeared += len(overlap)
+            print(f"  ⚠ {len(overlap)} clients churned in {y1} but reappear in {y2}")
+
+    if reappeared == 0:
+        print("  ✓ No churned clients reappear in later years.")
+    issues["reappeared_after_churn"] = reappeared
+
+    # Check 3: Year-over-year client count changes
+    print("\n  Client counts by year:")
+    for year in years:
+        n = df[df["year"] == year]["client_id"].nunique()
+        print(f"    {year}: {n:>8,} clients")
+    issues["years"] = years
+
+    return issues
+
+
+# =============================================================================
 # COMPREHENSIVE DATA QUALITY REPORT
 # =============================================================================
 
@@ -263,6 +324,7 @@ def run_all_h7_checks(
     results["duplicates"] = check_duplicates(df)
     results["nbi_consistency"] = check_nbi_consistency(df)
     results["zero_balance"] = check_zero_balance_active(df)
+    results["stock_consistency"] = check_stock_consistency(df)
 
     if transactions_path:
         from data_pipeline.churn_data_pipeline import load_data

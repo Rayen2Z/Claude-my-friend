@@ -5,14 +5,18 @@
   Validates the derived churn flag to ensure it's meaningful and well-defined.
 
   Checks:
-  1. Pull clients flagged as "churned" in 2024 and 2025
+  1. Pull clients flagged as "churned" in each year
   2. Document the churn flag definition precisely
   3. NBI distribution before churn — is it materially different from zero?
   4. % with NBI > 100 EUR before churning
   5. % with NBI ≈ 0 EUR before churning ("already gone" — churn flag is lagging)
-  6. Overall annual churn rate — stable between 2024 and 2025?
+  6. Overall annual churn rate — stable across years?
   7. Silent attrition detection (account open, NBI near-zero)
   8. Churned vs active client feature comparison
+  9. Upstream analysis — how many clients upstreamed vs churned?
+
+  Works with both Stock-based data (column: 'churned') and transaction-based
+  data (column: 'churned_next_year').
 ===============================================================================
 """
 
@@ -22,6 +26,16 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 from pathlib import Path
 from typing import Optional
+
+
+def _get_churn_col(df: pd.DataFrame) -> str:
+    """Detect which churn column is present."""
+    if "churned" in df.columns:
+        return "churned"
+    elif "churned_next_year" in df.columns:
+        return "churned_next_year"
+    else:
+        raise ValueError("No churn column found. Expected 'churned' or 'churned_next_year'.")
 
 
 def load_retention_data(path: str) -> pd.DataFrame:
@@ -35,31 +49,31 @@ def load_retention_data(path: str) -> pd.DataFrame:
 
 def check_churned_clients_by_year(df: pd.DataFrame) -> pd.DataFrame:
     """List clients flagged as churned, grouped by year."""
-    churned = df[df["churned_next_year"] == 1].copy()
+    churn_col = _get_churn_col(df)
 
-    summary = churned.groupby("year").agg(
-        n_churned=("client_id", "nunique"),
-        total_clients=("client_id", lambda x: df[df["year"] == x.name]["client_id"].nunique()),
-    )
-
-    # Simpler approach: compute per year
     yearly_stats = []
     for year in sorted(df["year"].unique()):
         year_data = df[df["year"] == year]
         n_total = year_data["client_id"].nunique()
-        n_churned = year_data[year_data["churned_next_year"] == 1]["client_id"].nunique()
+        n_churned = year_data[year_data[churn_col] == 1]["client_id"].nunique()
+        n_upstreamed = 0
+        if "is_upstreamed" in year_data.columns:
+            n_upstreamed = year_data[year_data["is_upstreamed"] == 1]["client_id"].nunique()
+
         yearly_stats.append({
             "year": year,
             "total_clients": n_total,
-            "churned_clients": n_churned,
+            "churned": n_churned,
+            "upstreamed": n_upstreamed,
+            "retained": n_total - n_churned - n_upstreamed,
             "churn_rate": n_churned / n_total if n_total > 0 else 0,
         })
 
     summary = pd.DataFrame(yearly_stats)
     print("\n=== CHECK 1: Churned Clients by Year ===")
     print(summary.to_string(index=False))
-    print(f"\nChurn definition: Client absent for 3+ consecutive months")
-    print(f"Target: 'churned_next_year' = 1 if client churns in year Y+1")
+    print(f"\nChurn definition: Client in Stock Y but NOT in Stock Y+1 and NOT upstreamed")
+    print(f"Upstreamed clients are treated as RETAINED (not churned).")
 
     return summary
 
@@ -75,11 +89,23 @@ def check_nbi_before_churn(
     """
     For churned clients: what was their NBI in the year BEFORE churn?
     Plot the distribution and compute key statistics.
+
+    Requires NBI columns (nbi_annual or nbi_q1..q4). If not present,
+    prints a message and returns empty — you'll need to enrich the data
+    with transaction features first.
     """
     Path(output_dir).mkdir(exist_ok=True)
+    churn_col = _get_churn_col(df)
 
-    churned = df[df["churned_next_year"] == 1].copy()
-    active = df[df["churned_next_year"] == 0].copy()
+    if "nbi_annual" not in df.columns:
+        print("\n=== CHECK 2: NBI Before Churn ===")
+        print("  ⚠ No 'nbi_annual' column found. This check requires enriching")
+        print("    the Stock-based churn data with transaction features (NBI).")
+        print("    Add NBI columns to your Stock CSVs or use enrich_churn_with_features().")
+        return {}
+
+    churned = df[df[churn_col] == 1].copy()
+    active = df[df[churn_col] == 0].copy()
 
     if churned.empty:
         print("No churned clients found — cannot analyze NBI before churn.")
@@ -88,7 +114,6 @@ def check_nbi_before_churn(
     nbi_churned = churned["nbi_annual"]
     nbi_active = active["nbi_annual"]
 
-    # Key statistics
     stats = {
         "churned_mean_nbi": nbi_churned.mean(),
         "churned_median_nbi": nbi_churned.median(),
@@ -119,7 +144,6 @@ def check_nbi_before_churn(
     # Plot: NBI distribution for churned vs active
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
 
-    # Histogram
     axes[0].hist(nbi_churned.clip(-500, 5000), bins=50, alpha=0.7,
                  label="Churned", color="red", density=True)
     axes[0].hist(nbi_active.clip(-500, 5000), bins=50, alpha=0.5,
@@ -130,7 +154,6 @@ def check_nbi_before_churn(
     axes[0].legend()
     axes[0].axvline(0, color="black", linestyle="--", alpha=0.5)
 
-    # Box plot
     data_to_plot = [
         nbi_churned.clip(-1000, 10000).dropna(),
         nbi_active.clip(-1000, 10000).dropna(),
@@ -156,19 +179,25 @@ def check_nbi_before_churn(
 # =============================================================================
 
 def check_churn_rate_stability(df: pd.DataFrame, output_dir: str = "plots") -> pd.DataFrame:
-    """Is the churn rate stable between 2024 and 2025?"""
+    """Is the churn rate stable across years?"""
     Path(output_dir).mkdir(exist_ok=True)
+    churn_col = _get_churn_col(df)
 
     yearly = []
     for year in sorted(df["year"].unique()):
         year_data = df[df["year"] == year]
         total = year_data["client_id"].nunique()
-        churned = year_data[year_data["churned_next_year"] == 1]["client_id"].nunique()
+        churned = year_data[year_data[churn_col] == 1]["client_id"].nunique()
+        upstreamed = 0
+        if "is_upstreamed" in year_data.columns:
+            upstreamed = year_data[year_data["is_upstreamed"] == 1]["client_id"].nunique()
         yearly.append({
             "year": year,
             "total_clients": total,
             "churned": churned,
+            "upstreamed": upstreamed,
             "churn_rate": churned / total if total > 0 else 0,
+            "upstream_rate": upstreamed / total if total > 0 else 0,
         })
 
     yearly_df = pd.DataFrame(yearly)
@@ -189,13 +218,20 @@ def check_churn_rate_stability(df: pd.DataFrame, output_dir: str = "plots") -> p
     # Plot
     if len(yearly_df) >= 2:
         fig, ax = plt.subplots(figsize=(8, 5))
-        ax.bar(yearly_df["year"].astype(str), yearly_df["churn_rate"], color="coral")
-        ax.set_ylabel("Churn Rate")
-        ax.set_title("Annual Churn Rate Over Time")
+        x = np.arange(len(yearly_df))
+        width = 0.35
+        ax.bar(x - width/2, yearly_df["churn_rate"], width, label="Churn Rate", color="coral")
+        if yearly_df["upstream_rate"].sum() > 0:
+            ax.bar(x + width/2, yearly_df["upstream_rate"], width, label="Upstream Rate", color="teal")
+        ax.set_xticks(x)
+        ax.set_xticklabels(yearly_df["year"].astype(str))
+        ax.set_ylabel("Rate")
+        ax.set_title("Annual Churn & Upstream Rates")
         ax.yaxis.set_major_formatter(mticker.PercentFormatter(1.0))
+        ax.legend()
         for i, row in yearly_df.iterrows():
-            ax.text(i, row["churn_rate"] + 0.005, f"{row['churn_rate']:.1%}",
-                    ha="center", fontsize=10)
+            ax.text(i - width/2, row["churn_rate"] + 0.005, f"{row['churn_rate']:.1%}",
+                    ha="center", fontsize=9)
         plt.tight_layout()
         plt.savefig(f"{output_dir}/h5_churn_rate_stability.png", dpi=150, bbox_inches="tight")
         plt.close()
@@ -214,13 +250,18 @@ def check_silent_attrition(
     output_dir: str = "plots",
 ) -> pd.DataFrame:
     """
-    Find clients who are technically active (account open, not flagged as churned)
+    Find clients who are technically active (not flagged as churned)
     but whose NBI dropped to near-zero. These are "silent attrition" cases.
     """
     Path(output_dir).mkdir(exist_ok=True)
+    churn_col = _get_churn_col(df)
 
-    # Active clients (not churned) with very low NBI
-    active = df[df["churned_next_year"] == 0].copy()
+    if "nbi_annual" not in df.columns:
+        print("\n=== CHECK 4: Silent Attrition ===")
+        print("  ⚠ No 'nbi_annual' column. Requires NBI data to detect silent attrition.")
+        return pd.DataFrame()
+
+    active = df[df[churn_col] == 0].copy()
     silent = active[active["nbi_annual"].abs() < nbi_threshold].copy()
 
     total_active = len(active)
@@ -237,7 +278,6 @@ def check_silent_attrition(
         print("    Consider adding NBI-based churn criterion or a separate")
         print("    'silent attrition' label for your retention model.")
 
-    # Year-by-year breakdown
     silent_by_year = []
     for year in sorted(active["year"].unique()):
         yr_active = active[active["year"] == year]
@@ -266,23 +306,27 @@ def check_churned_vs_active_features(
 ) -> pd.DataFrame:
     """Quick comparison of churned vs active clients on key features."""
     Path(output_dir).mkdir(exist_ok=True)
+    churn_col = _get_churn_col(df)
 
-    feature_cols = [
-        "nbi_annual", "quarters_active",
-    ]
-    # Add any available demographic columns
-    for col in ["age", "tenure_months"]:
+    # Dynamically pick available numeric feature columns
+    feature_cols = []
+    for col in ["nbi_annual", "quarters_active", "age", "tenure_months"]:
         if col in df.columns:
             feature_cols.append(col)
-    # Add product columns if available
     for q in range(1, 5):
         col = f"n_products_q{q}"
         if col in df.columns:
             feature_cols.append(col)
-            break  # Just include one for summary
+            break
 
-    churned = df[df["churned_next_year"] == 1]
-    active = df[df["churned_next_year"] == 0]
+    if not feature_cols:
+        print("\n=== CHECK 5: Churned vs Active — Feature Comparison ===")
+        print("  ⚠ No numeric feature columns available for comparison.")
+        print("    Enrich your Stock data with NBI/transaction features first.")
+        return pd.DataFrame()
+
+    churned = df[df[churn_col] == 1]
+    active = df[df[churn_col] == 0]
 
     comparison = []
     for col in feature_cols:
@@ -308,6 +352,55 @@ def check_churned_vs_active_features(
 
 
 # =============================================================================
+# CHECK 6: Upstream analysis
+# =============================================================================
+
+def check_upstream_analysis(df: pd.DataFrame) -> pd.DataFrame:
+    """Analyze upstreamed clients — are they truly different from churned?"""
+    churn_col = _get_churn_col(df)
+
+    if "is_upstreamed" not in df.columns:
+        print("\n=== CHECK 6: Upstream Analysis ===")
+        print("  ⚠ No 'is_upstreamed' column. Skipping.")
+        return pd.DataFrame()
+
+    yearly = []
+    for year in sorted(df["year"].unique()):
+        yd = df[df["year"] == year]
+        total = len(yd)
+        n_churned = (yd[churn_col] == 1).sum()
+        n_upstream = (yd["is_upstreamed"] == 1).sum()
+        n_retained = total - n_churned - n_upstream
+        yearly.append({
+            "year": year,
+            "total": total,
+            "retained": n_retained,
+            "upstreamed": n_upstream,
+            "churned": n_churned,
+            "pct_retained": n_retained / total * 100 if total > 0 else 0,
+            "pct_upstreamed": n_upstream / total * 100 if total > 0 else 0,
+            "pct_churned": n_churned / total * 100 if total > 0 else 0,
+        })
+
+    yearly_df = pd.DataFrame(yearly)
+    print("\n=== CHECK 6: Upstream Analysis ===")
+    print(yearly_df.to_string(index=False, float_format="%.1f"))
+
+    # If NBI available, compare NBI of upstreamed vs retained vs churned
+    if "nbi_annual" in df.columns:
+        print("\n  NBI comparison:")
+        for label, mask in [("Retained", (df[churn_col] == 0) & (df["is_upstreamed"] == 0)),
+                             ("Upstreamed", df["is_upstreamed"] == 1),
+                             ("Churned", df[churn_col] == 1)]:
+            subset = df[mask]
+            if not subset.empty:
+                print(f"    {label:12s}: mean NBI = {subset['nbi_annual'].mean():>10.2f}, "
+                      f"median = {subset['nbi_annual'].median():>10.2f}, n = {len(subset)}")
+
+    return yearly_df
+
+
+# =============================================================================
 # RUN ALL H5 CHECKS
 # =============================================================================
 
@@ -328,6 +421,7 @@ def run_all_h5_checks(
     results["churn_stability"] = check_churn_rate_stability(df, output_dir)
     results["silent_attrition"] = check_silent_attrition(df, output_dir=output_dir)
     results["feature_comparison"] = check_churned_vs_active_features(df, output_dir)
+    results["upstream_analysis"] = check_upstream_analysis(df)
 
     print("\n" + "=" * 70)
     print("  H5 VALIDATION COMPLETE")
@@ -335,9 +429,9 @@ def run_all_h5_checks(
     print("\nKey questions for your business team:")
     print("  1. Is there a difference between 'account closed' and 'relationship ended'?")
     print("     A client might close one account but keep another.")
-    print("  2. What exactly is the churn flag definition? Account closure only,")
-    print("     or does it include dormancy (no transactions for X months)?")
-    print("  3. Is there a minimum inactivity period before considering churn?")
+    print("  2. Are upstreamed clients truly gone from your portfolio, or do some")
+    print("     maintain accounts in both mainstream and VIP?")
+    print("  3. Is the upstream threshold (NBI/AUM cutoff) consistent across years?")
 
     return results
 

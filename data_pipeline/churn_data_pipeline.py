@@ -2,14 +2,20 @@
 ===============================================================================
   CHURN / RETENTION DATA PIPELINE
 ===============================================================================
-  Transforms raw client data into the annual+quarterly structure used by the
-  CLV model, with churn labels derived from month-over-month presence.
+  Two modes of operation:
+
+  MODE 1 (PRIMARY): From Stock CSVs
+    Uses CHURN_YYYY folders with Stock Y, Stock Y+1, Upstreaming.csv files.
+    Churn is derived by comparing client lists year-over-year.
+
+  MODE 2 (FALLBACK): From transaction data
+    Derives churn from monthly transaction presence (3+ month absence).
 
   CRITICAL: Clients who "upstream" to the VIP portfolio are NOT churned.
-  They must be excluded from churn events and labeled as retained (target=0).
+  They are flagged as retained (target=0).
 
-  Input:  Raw client-level monthly data (CSV export from SAP BI or DB connection)
-  Output: One row per client per year with quarterly features + churn target
+  Output: One row per client per year with churn target + any extra columns
+          from the Stock files (expandable for quarterly features later).
 ===============================================================================
 """
 
@@ -31,7 +37,47 @@ def load_data(
 
 
 # =============================================================================
-# STEP 1: Derive churn from monthly presence
+# MODE 1: Build dataset from Stock CSVs (PRIMARY)
+# =============================================================================
+
+def run_pipeline_from_stocks(
+    base_path: str,
+    years: list = None,
+    encoding: str = "utf-8",
+    output_path: str = "retention_model_data.csv",
+) -> pd.DataFrame:
+    """
+    Build retention dataset from CHURN_YYYY/Stock CSVs.
+
+    This is the primary pipeline. It loads Stock Y vs Stock Y+1 files,
+    derives churn, and merges all years into a single dataset.
+
+    Parameters
+    ----------
+    base_path : Directory containing CHURN_2023/, CHURN_2024/, CHURN_2025/
+    years : Years to process (auto-detected if None)
+    encoding : CSV encoding (try 'latin-1' if utf-8 fails)
+    output_path : Where to save output
+
+    Returns
+    -------
+    DataFrame: one row per client per year with columns:
+        client_id, year, churned, is_upstreamed, + any extra Stock columns
+    """
+    from data_pipeline.load_churn_csvs import build_churn_dataset
+
+    df = build_churn_dataset(
+        base_path=base_path,
+        years=years,
+        encoding=encoding,
+        output_path=output_path,
+    )
+
+    return df
+
+
+# =============================================================================
+# MODE 2: Derive churn from transaction presence (FALLBACK)
 # =============================================================================
 
 def derive_monthly_churn(
@@ -120,7 +166,7 @@ def derive_monthly_churn(
 
 
 # =============================================================================
-# STEP 2: Build quarterly features (aligned with CLV structure)
+# Feature building (used by both modes when transaction data is available)
 # =============================================================================
 
 def build_quarterly_features(
@@ -131,16 +177,6 @@ def build_quarterly_features(
     """
     Aggregate transaction data into one-row-per-client-per-year with quarterly
     snapshot columns, matching the CLV model structure.
-
-    Parameters
-    ----------
-    df : Raw transaction DataFrame
-    nbi_col : Column name for Net Banking Income
-    product_col : Column name for product identifier (optional)
-
-    Returns
-    -------
-    DataFrame: one row per (client_id, year) with quarterly features
     """
     df = df.copy()
     df["year"] = df["transaction_date"].dt.year
@@ -231,56 +267,46 @@ def build_quarterly_features(
     return features
 
 
-# =============================================================================
-# STEP 3: Attach churn target to annual features
-# =============================================================================
-
-def attach_churn_target(
-    features_df: pd.DataFrame,
+def enrich_churn_with_features(
     churn_df: pd.DataFrame,
-    upstreamed_clients: Optional[pd.DataFrame] = None,
+    features_df: pd.DataFrame,
 ) -> pd.DataFrame:
     """
-    Add 'churned_next_year' target column and 'is_upstreamed' flag.
+    Merge quarterly features (from transaction data) into the churn dataset
+    (from Stock CSVs). This enriches the client-year rows with NBI, transaction
+    counts, etc. for model training.
 
-    The target for year Y is: did the client churn at any point in year Y+1?
-    Upstreamed clients are explicitly marked as NOT churned (target=0).
+    Parameters
+    ----------
+    churn_df : Output of build_churn_dataset() — has client_id, year, churned
+    features_df : Output of build_quarterly_features() — has quarterly columns
+
+    Returns
+    -------
+    Enriched DataFrame with churn labels + quarterly features
     """
-    if churn_df.empty:
-        features_df["churned_next_year"] = 0
-    else:
-        churn_df = churn_df.copy()
-        churn_df["churn_year"] = churn_df["churn_month"].dt.year
+    # Standardize column types for merge
+    churn_df = churn_df.copy()
+    features_df = features_df.copy()
+    churn_df["client_id"] = churn_df["client_id"].astype(str)
+    features_df["client_id"] = features_df["client_id"].astype(str)
 
-        # For each client, get the year they churned
-        churn_lookup = churn_df[["client_id", "churn_year"]].drop_duplicates()
+    merged = churn_df.merge(
+        features_df,
+        on=["client_id", "year"],
+        how="left",
+    )
 
-        features_df = features_df.merge(churn_lookup, on="client_id", how="left")
-        features_df["churned_next_year"] = (
-            features_df["churn_year"] == features_df["year"] + 1
-        ).astype(int)
-        features_df.drop(columns=["churn_year"], inplace=True)
+    n_matched = merged[merged["nbi_annual"].notna()].shape[0] if "nbi_annual" in merged.columns else 0
+    n_total = len(merged)
 
-    # Flag upstreamed clients — these are retained, NOT churned
-    features_df["is_upstreamed"] = 0
-    if upstreamed_clients is not None and not upstreamed_clients.empty:
-        upstream_ids = set(upstreamed_clients["client_id"].unique())
-        features_df["is_upstreamed"] = features_df["client_id"].isin(upstream_ids).astype(int)
+    print(f"\n  Feature enrichment:")
+    print(f"    Churn rows: {n_total}")
+    print(f"    Matched with features: {n_matched} ({n_matched/n_total*100:.1f}%)")
+    print(f"    Unmatched (no transaction data): {n_total - n_matched}")
 
-        # Safety: force churned_next_year = 0 for upstreamed clients
-        n_corrected = (
-            (features_df["is_upstreamed"] == 1) & (features_df["churned_next_year"] == 1)
-        ).sum()
-        if n_corrected > 0:
-            print(f"  Corrected {n_corrected} upstreamed clients from churned → retained")
-        features_df.loc[features_df["is_upstreamed"] == 1, "churned_next_year"] = 0
+    return merged
 
-    return features_df
-
-
-# =============================================================================
-# STEP 4: Attach client demographics
-# =============================================================================
 
 def attach_demographics(
     features_df: pd.DataFrame,
@@ -310,98 +336,29 @@ def attach_demographics(
     return features_df
 
 
-# =============================================================================
-# MAIN PIPELINE
-# =============================================================================
-
-def run_pipeline(
-    transactions_path: str,
-    clients_path: Optional[str] = None,
-    upstreamed_path: Optional[str] = None,
-    output_path: str = "retention_model_data.csv",
-    absence_threshold: int = 3,
-    nbi_col: str = "nbi_amount",
-    product_col: str = "product_id",
-) -> pd.DataFrame:
-    """
-    Full pipeline: raw data -> CLV-aligned retention dataset.
-
-    Parameters
-    ----------
-    transactions_path : Path to transaction CSV
-    clients_path : Path to client demographics CSV (optional)
-    upstreamed_path : Path to CSV listing clients who moved to VIP portfolio.
-        Must have at least a 'client_id' column. These clients will be
-        excluded from churn and flagged as is_upstreamed=1.
-    output_path : Where to save the final dataset
-    absence_threshold : Months absent to confirm churn
-    nbi_col : Column name for NBI amounts
-    product_col : Column name for product IDs
-
-    Returns
-    -------
-    DataFrame ready for retention model training
-    """
-    print("Loading transaction data...")
-    df = load_data(transactions_path)
-
-    # Load upstreamed clients if provided
-    upstreamed = None
-    if upstreamed_path:
-        print("Loading upstreamed (VIP) client list...")
-        upstreamed = pd.read_csv(upstreamed_path)
-        print(f"  {len(upstreamed)} upstreamed clients loaded")
-
-    print("Deriving monthly churn labels...")
-    churn_df = derive_monthly_churn(
-        df,
-        absence_threshold=absence_threshold,
-        upstreamed_clients=upstreamed,
-    )
-    print(f"  Found {len(churn_df)} confirmed churn events")
-
-    print("Building quarterly features (CLV-aligned)...")
-    features = build_quarterly_features(df, nbi_col=nbi_col, product_col=product_col)
-    print(f"  Built {len(features)} client-year records")
-
-    print("Attaching churn target...")
-    features = attach_churn_target(features, churn_df, upstreamed_clients=upstreamed)
-    churn_rate = features["churned_next_year"].mean()
-    n_upstreamed = features["is_upstreamed"].sum()
-    print(f"  Overall churn rate: {churn_rate:.2%}")
-    print(f"  Upstreamed clients (treated as retained): {n_upstreamed}")
-
-    if clients_path:
-        print("Attaching client demographics...")
-        clients = pd.read_csv(clients_path)
-        features = attach_demographics(features, clients)
-
-    features.to_csv(output_path, index=False)
-    print(f"Saved to {output_path}: {features.shape}")
-
-    return features
-
-
 if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="Build retention model dataset")
-    parser.add_argument("--transactions", required=True, help="Path to transactions CSV")
+    parser.add_argument("--mode", choices=["stocks", "transactions"], default="stocks",
+                        help="Data source: 'stocks' (CHURN_YYYY folders) or 'transactions' (raw txn CSV)")
+    parser.add_argument("--base-path", default=".",
+                        help="[stocks mode] Directory containing CHURN_YYYY folders")
+    parser.add_argument("--years", nargs="+", type=int, default=None,
+                        help="[stocks mode] Years to process (auto-detect if omitted)")
+    parser.add_argument("--transactions", default=None,
+                        help="[transactions mode] Path to transactions CSV")
     parser.add_argument("--clients", default=None, help="Path to clients CSV")
-    parser.add_argument("--upstreamed", default=None,
-                        help="Path to CSV of clients who moved to VIP portfolio")
+    parser.add_argument("--encoding", default="utf-8", help="CSV encoding")
     parser.add_argument("--output", default="retention_model_data.csv")
-    parser.add_argument("--absence-threshold", type=int, default=3)
-    parser.add_argument("--nbi-col", default="nbi_amount")
-    parser.add_argument("--product-col", default="product_id")
     args = parser.parse_args()
 
-    run_pipeline(
-        transactions_path=args.transactions,
-        clients_path=args.clients,
-        upstreamed_path=args.upstreamed,
-        output_path=args.output,
-        absence_threshold=args.absence_threshold,
-        nbi_col=args.nbi_col,
-        product_col=args.product_col,
-    )
+    if args.mode == "stocks":
+        df = run_pipeline_from_stocks(
+            base_path=args.base_path,
+            years=args.years,
+            encoding=args.encoding,
+            output_path=args.output,
+        )
+    else:
+        print("Transaction-based mode — use run_validation.py for full pipeline")
