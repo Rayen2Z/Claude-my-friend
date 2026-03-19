@@ -38,6 +38,8 @@ def main():
     parser = argparse.ArgumentParser(description="Run full retention model validation")
     parser.add_argument("--transactions", required=True, help="Path to transactions CSV")
     parser.add_argument("--clients", default=None, help="Path to clients CSV (optional)")
+    parser.add_argument("--upstreamed", default=None,
+                        help="Path to CSV of clients who moved to VIP portfolio")
     parser.add_argument("--output-dir", default="results", help="Output directory")
     parser.add_argument("--absence-threshold", type=int, default=3,
                         help="Months absent to confirm churn (default: 3)")
@@ -55,10 +57,17 @@ def main():
     print("  STEP 1: BUILD RETENTION DATASET")
     print("=" * 70)
 
+    # Load upstreamed clients if provided
+    import pandas as pd
+    upstreamed = None
+    if args.upstreamed:
+        upstreamed = pd.read_csv(args.upstreamed)
+
     retention_data_path = str(output_dir / "retention_model_data.csv")
     features_df = run_pipeline(
         transactions_path=args.transactions,
         clients_path=args.clients,
+        upstreamed_path=args.upstreamed,
         output_path=retention_data_path,
         absence_threshold=args.absence_threshold,
     )
@@ -66,7 +75,11 @@ def main():
     # Also save churn events for H3
     print("\nExporting churn events for H3 validation...")
     raw_df = load_data(args.transactions)
-    churn_df = derive_monthly_churn(raw_df, absence_threshold=args.absence_threshold)
+    churn_df = derive_monthly_churn(
+        raw_df,
+        absence_threshold=args.absence_threshold,
+        upstreamed_clients=upstreamed,
+    )
     churn_events_path = str(output_dir / "churn_events.csv")
     churn_df.to_csv(churn_events_path, index=False)
 

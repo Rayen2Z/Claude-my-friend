@@ -5,6 +5,9 @@
   Transforms raw client data into the annual+quarterly structure used by the
   CLV model, with churn labels derived from month-over-month presence.
 
+  CRITICAL: Clients who "upstream" to the VIP portfolio are NOT churned.
+  They must be excluded from churn events and labeled as retained (target=0).
+
   Input:  Raw client-level monthly data (CSV export from SAP BI or DB connection)
   Output: One row per client per year with quarterly features + churn target
 ===============================================================================
@@ -34,24 +37,33 @@ def load_data(
 def derive_monthly_churn(
     df: pd.DataFrame,
     absence_threshold: int = 3,
+    upstreamed_clients: Optional[pd.DataFrame] = None,
 ) -> pd.DataFrame:
     """
     Derive churn by comparing client presence month-over-month.
 
     A client is flagged as churned if they disappear for `absence_threshold`
-    consecutive months. This avoids false positives from temporary inactivity.
+    consecutive months. Clients who upstreamed to VIP are EXCLUDED from churn.
 
     Parameters
     ----------
     df : DataFrame with at least ['client_id', 'transaction_date']
     absence_threshold : Number of consecutive absent months to confirm churn
+    upstreamed_clients : DataFrame with 'client_id' column listing clients
+        who moved to the VIP portfolio. These are NOT churned.
 
     Returns
     -------
     DataFrame with columns:
         client_id, churn_month, last_active_month
     """
+    # Build set of upstreamed client IDs for fast lookup
+    upstream_ids = set()
+    if upstreamed_clients is not None and not upstreamed_clients.empty:
+        upstream_ids = set(upstreamed_clients["client_id"].unique())
+
     # Build monthly presence
+    df = df.copy()
     df["active_month"] = df["transaction_date"].dt.to_period("M")
     monthly_presence = df.groupby("client_id")["active_month"].apply(set).reset_index()
     monthly_presence.rename(columns={"active_month": "active_months"}, inplace=True)
@@ -64,10 +76,16 @@ def derive_monthly_churn(
     )
 
     churn_records = []
+    n_upstream_excluded = 0
 
     for _, row in monthly_presence.iterrows():
         client_id = row["client_id"]
         active = row["active_months"]
+
+        # Skip upstreamed clients — they are NOT churned
+        if client_id in upstream_ids:
+            n_upstream_excluded += 1
+            continue
 
         consecutive_absent = 0
         last_active = None
@@ -86,6 +104,9 @@ def derive_monthly_churn(
                             "churn_month": last_active + absence_threshold,
                         })
                         break  # Only record first confirmed churn
+
+    if n_upstream_excluded > 0:
+        print(f"  Excluded {n_upstream_excluded} upstreamed (VIP) clients from churn")
 
     churn_df = pd.DataFrame(churn_records)
     if not churn_df.empty:
@@ -217,28 +238,42 @@ def build_quarterly_features(
 def attach_churn_target(
     features_df: pd.DataFrame,
     churn_df: pd.DataFrame,
+    upstreamed_clients: Optional[pd.DataFrame] = None,
 ) -> pd.DataFrame:
     """
-    Add 'churned_next_year' target column.
+    Add 'churned_next_year' target column and 'is_upstreamed' flag.
 
     The target for year Y is: did the client churn at any point in year Y+1?
-    This is what the retention model predicts.
+    Upstreamed clients are explicitly marked as NOT churned (target=0).
     """
     if churn_df.empty:
         features_df["churned_next_year"] = 0
-        return features_df
+    else:
+        churn_df = churn_df.copy()
+        churn_df["churn_year"] = churn_df["churn_month"].dt.year
 
-    churn_df = churn_df.copy()
-    churn_df["churn_year"] = churn_df["churn_month"].dt.year
+        # For each client, get the year they churned
+        churn_lookup = churn_df[["client_id", "churn_year"]].drop_duplicates()
 
-    # For each client, get the year they churned
-    churn_lookup = churn_df[["client_id", "churn_year"]].drop_duplicates()
+        features_df = features_df.merge(churn_lookup, on="client_id", how="left")
+        features_df["churned_next_year"] = (
+            features_df["churn_year"] == features_df["year"] + 1
+        ).astype(int)
+        features_df.drop(columns=["churn_year"], inplace=True)
 
-    features_df = features_df.merge(churn_lookup, on="client_id", how="left")
-    features_df["churned_next_year"] = (
-        features_df["churn_year"] == features_df["year"] + 1
-    ).astype(int)
-    features_df.drop(columns=["churn_year"], inplace=True)
+    # Flag upstreamed clients — these are retained, NOT churned
+    features_df["is_upstreamed"] = 0
+    if upstreamed_clients is not None and not upstreamed_clients.empty:
+        upstream_ids = set(upstreamed_clients["client_id"].unique())
+        features_df["is_upstreamed"] = features_df["client_id"].isin(upstream_ids).astype(int)
+
+        # Safety: force churned_next_year = 0 for upstreamed clients
+        n_corrected = (
+            (features_df["is_upstreamed"] == 1) & (features_df["churned_next_year"] == 1)
+        ).sum()
+        if n_corrected > 0:
+            print(f"  Corrected {n_corrected} upstreamed clients from churned → retained")
+        features_df.loc[features_df["is_upstreamed"] == 1, "churned_next_year"] = 0
 
     return features_df
 
@@ -282,6 +317,7 @@ def attach_demographics(
 def run_pipeline(
     transactions_path: str,
     clients_path: Optional[str] = None,
+    upstreamed_path: Optional[str] = None,
     output_path: str = "retention_model_data.csv",
     absence_threshold: int = 3,
     nbi_col: str = "nbi_amount",
@@ -294,6 +330,9 @@ def run_pipeline(
     ----------
     transactions_path : Path to transaction CSV
     clients_path : Path to client demographics CSV (optional)
+    upstreamed_path : Path to CSV listing clients who moved to VIP portfolio.
+        Must have at least a 'client_id' column. These clients will be
+        excluded from churn and flagged as is_upstreamed=1.
     output_path : Where to save the final dataset
     absence_threshold : Months absent to confirm churn
     nbi_col : Column name for NBI amounts
@@ -306,8 +345,19 @@ def run_pipeline(
     print("Loading transaction data...")
     df = load_data(transactions_path)
 
+    # Load upstreamed clients if provided
+    upstreamed = None
+    if upstreamed_path:
+        print("Loading upstreamed (VIP) client list...")
+        upstreamed = pd.read_csv(upstreamed_path)
+        print(f"  {len(upstreamed)} upstreamed clients loaded")
+
     print("Deriving monthly churn labels...")
-    churn_df = derive_monthly_churn(df, absence_threshold=absence_threshold)
+    churn_df = derive_monthly_churn(
+        df,
+        absence_threshold=absence_threshold,
+        upstreamed_clients=upstreamed,
+    )
     print(f"  Found {len(churn_df)} confirmed churn events")
 
     print("Building quarterly features (CLV-aligned)...")
@@ -315,9 +365,11 @@ def run_pipeline(
     print(f"  Built {len(features)} client-year records")
 
     print("Attaching churn target...")
-    features = attach_churn_target(features, churn_df)
+    features = attach_churn_target(features, churn_df, upstreamed_clients=upstreamed)
     churn_rate = features["churned_next_year"].mean()
+    n_upstreamed = features["is_upstreamed"].sum()
     print(f"  Overall churn rate: {churn_rate:.2%}")
+    print(f"  Upstreamed clients (treated as retained): {n_upstreamed}")
 
     if clients_path:
         print("Attaching client demographics...")
@@ -336,6 +388,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Build retention model dataset")
     parser.add_argument("--transactions", required=True, help="Path to transactions CSV")
     parser.add_argument("--clients", default=None, help="Path to clients CSV")
+    parser.add_argument("--upstreamed", default=None,
+                        help="Path to CSV of clients who moved to VIP portfolio")
     parser.add_argument("--output", default="retention_model_data.csv")
     parser.add_argument("--absence-threshold", type=int, default=3)
     parser.add_argument("--nbi-col", default="nbi_amount")
@@ -345,6 +399,7 @@ if __name__ == "__main__":
     run_pipeline(
         transactions_path=args.transactions,
         clients_path=args.clients,
+        upstreamed_path=args.upstreamed,
         output_path=args.output,
         absence_threshold=args.absence_threshold,
         nbi_col=args.nbi_col,

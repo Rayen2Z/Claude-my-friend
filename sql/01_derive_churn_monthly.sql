@@ -5,9 +5,44 @@
   Logic: A client is "churned" in month M if they were present in M-1 but
          absent in M. This avoids needing a dedicated churn flag column.
 
+  CRITICAL: Clients who "upstream" (moved to VIP database) must NOT be
+  labeled as churned. They are a positive outcome (client got richer).
+  We use the VIP client list to exclude them from churn events.
+
   IMPORTANT: Adjust table/column names to match your SAP BI schema.
 ===============================================================================
 */
+
+-- ============================================================================
+-- STEP 0: Identify upstreamed clients (moved to VIP portfolio)
+-- ============================================================================
+-- Option A: If VIP team provides a list/table of clients they received
+-- Option B: If there's a status flag in the client master table
+-- Adjust the source to match what's available in your SAP BI environment.
+
+WITH upstreamed_clients AS (
+    -- OPTION A: Direct VIP client table (preferred — ask the VIP team)
+    SELECT
+        client_id,
+        migration_date AS upstream_date  -- When they moved to VIP
+    FROM
+        your_schema.vip_client_migrations  -- << REPLACE with actual VIP table
+
+    -- OPTION B: If no VIP table exists, use client master status field
+    -- SELECT
+    --     client_id,
+    --     status_change_date AS upstream_date
+    -- FROM your_schema.client_master
+    -- WHERE client_segment = 'VIP'
+    --   AND previous_segment IN ('Mainstream', 'Standard')
+
+    -- OPTION C: If nothing exists, use NBI threshold as proxy
+    -- (clients whose last-year NBI exceeded VIP eligibility threshold)
+    -- SELECT client_id, MAX(transaction_date) AS upstream_date
+    -- FROM your_schema.client_transactions
+    -- GROUP BY client_id
+    -- HAVING SUM(nbi_amount) > 50000  -- << VIP eligibility threshold
+),
 
 -- ============================================================================
 -- STEP 1: Build a monthly client presence table
@@ -15,7 +50,7 @@
 -- This CTE extracts distinct active clients per month from your transaction
 -- or account table. Adapt the source table and date column to your schema.
 
-WITH monthly_presence AS (
+monthly_presence AS (
     SELECT DISTINCT
         client_id,
         -- Truncate transaction/snapshot date to first of month
@@ -64,16 +99,20 @@ churn_events AS (
 
 -- ============================================================================
 -- STEP 4: Flag "confirmed" churn (absent for 3+ consecutive months)
+--         EXCLUDING upstreamed clients (they are NOT churned)
 -- ============================================================================
--- This avoids false positives from clients who skip a month then return.
+-- This avoids false positives from clients who skip a month then return,
+-- and critically, excludes clients who moved to the VIP portfolio.
 confirmed_churn AS (
     SELECT
-        client_id,
-        MIN(churn_month) AS churn_month,
-        last_active_month
-    FROM churn_events
-    WHERE consecutive_absent_months >= 3  -- Adjust threshold as needed
-    GROUP BY client_id, last_active_month
+        ce.client_id,
+        MIN(ce.churn_month) AS churn_month,
+        ce.last_active_month
+    FROM churn_events ce
+    LEFT JOIN upstreamed_clients uc ON uc.client_id = ce.client_id
+    WHERE ce.consecutive_absent_months >= 3  -- Adjust threshold as needed
+      AND uc.client_id IS NULL               -- EXCLUDE upstreamed clients
+    GROUP BY ce.client_id, ce.last_active_month
 ),
 
 -- ============================================================================
@@ -99,17 +138,36 @@ silent_attrition AS (
 )
 
 -- ============================================================================
--- FINAL OUTPUT: Churn lookup table
+-- FINAL OUTPUT: Churn lookup table with upstream flag
 -- ============================================================================
 SELECT
     mp.client_id,
     mp.active_month,
+
+    -- Client outcome classification (3-class)
+    CASE
+        WHEN uc.client_id IS NOT NULL THEN 'upstreamed'
+        WHEN cc.churn_month IS NOT NULL THEN 'churned'
+        WHEN sa.client_id IS NOT NULL AND cc.churn_month IS NULL THEN 'silent_attrition'
+        ELSE 'active'
+    END AS client_status,
+
+    -- Binary churn flag (upstreamed = NOT churned)
     CASE
         WHEN cc.churn_month IS NOT NULL THEN 1
         ELSE 0
     END AS is_churned,
+
+    -- Upstream flag (for analysis and exclusion)
+    CASE
+        WHEN uc.client_id IS NOT NULL THEN 1
+        ELSE 0
+    END AS is_upstreamed,
+
     cc.churn_month,
     cc.last_active_month,
+    uc.upstream_date,
+
     CASE
         WHEN sa.client_id IS NOT NULL AND cc.churn_month IS NULL THEN 1
         ELSE 0
@@ -120,6 +178,9 @@ LEFT JOIN
     confirmed_churn cc
     ON cc.client_id = mp.client_id
     AND mp.active_month >= cc.last_active_month
+LEFT JOIN
+    upstreamed_clients uc
+    ON uc.client_id = mp.client_id
 LEFT JOIN
     silent_attrition sa
     ON sa.client_id = mp.client_id
