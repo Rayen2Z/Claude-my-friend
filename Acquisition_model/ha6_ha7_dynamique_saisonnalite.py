@@ -6,9 +6,15 @@
 #        apporte-t-elle un signal au-dela du niveau cumule ?
 # HA7 : Le trimestre d'acquisition influence-t-il le PNB a 12 mois ?
 #
-# Prerequis : df avec pnb_m1..pnb_m6 (au minimum), pnb_12m_total,
-#   date_creation ou trimestre_acquisition
+# Prerequis : executer data_preparation.ipynb -> df_acquisitions.pkl
 # =============================================================================
+
+
+# %% ---- CELL 0: Charger le DataFrame ----
+
+import pickle
+df = pickle.load(open("df_acquisitions.pkl", "rb"))
+print(f"DataFrame charge : {df.shape[0]:,} lignes, {df.shape[1]} colonnes")
 
 
 # %% ---- CELL 1: Imports ----
@@ -201,15 +207,9 @@ print("\n" + "=" * 60)
 print("HA7 — SAISONNALITE D'ACQUISITION")
 print("=" * 60)
 
-# Derive quarter
-if "date_creation" in df.columns:
-    df["date_creation"] = pd.to_datetime(df["date_creation"], errors="coerce")
-    df["trimestre_acquisition"] = df["date_creation"].dt.quarter.map(
-        {1: "Q1", 2: "Q2", 3: "Q3", 4: "Q4"}
-    )
-    df["annee_acquisition"] = df["date_creation"].dt.year
-elif "trimestre_acquisition" not in df.columns:
-    print("Colonne date_creation ou trimestre_acquisition non trouvee.")
+# trimestre_acquisition et annee_acquisition deja derives dans data_preparation
+if "trimestre_acquisition" not in df.columns:
+    print("Colonne trimestre_acquisition non trouvee. Executer data_preparation.ipynb.")
 
 if "trimestre_acquisition" in df.columns:
     q_stats = df.groupby("trimestre_acquisition")["pnb_12m_total"].agg(
