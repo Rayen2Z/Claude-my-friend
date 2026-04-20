@@ -9,9 +9,17 @@
 #   - Couverture des equipements
 #   - Distribution des variables categorielles
 #
-# Prerequis : df = DataFrame unifie avec colonnes client_id, date_creation,
-#   segment, profession, pnb_m1..pnb_m12, equipements, etc.
+# Prerequis : executer data_preparation.ipynb -> df_acquisitions.pkl
 # =============================================================================
+
+
+# %% ---- CELL 0: Charger le DataFrame ----
+
+import pickle
+from pathlib import Path
+
+df = pickle.load(open("df_acquisitions.pkl", "rb"))
+print(f"DataFrame charge : {df.shape[0]:,} lignes, {df.shape[1]} colonnes")
 
 
 # %% ---- CELL 1: Imports ----
@@ -68,12 +76,13 @@ print(f"Doublons client_id : {n_doublons:,} ({n_doublons/n_total*100:.2f}%)")
 
 if n_doublons > 0:
     dupes = df[df.duplicated(subset=["client_id"], keep=False)]
+    show_cols = [c for c in ["client_id", "date_creation", "annee_acquisition", "segment"] if c in dupes.columns]
     print(f"\nExemple de doublons :")
-    print(dupes.head(10)[["client_id", "date_creation", "segment"]].to_string())
+    print(dupes.head(10)[show_cols].to_string())
     print("\nACTION : verifier si ce sont des multi-entrees ou des erreurs.")
 
 
-# %% ---- CELL 4: Coherence des dates de creation ----
+# %% ---- CELL 4: Coherence des dates / periodes d'acquisition ----
 
 print("\n" + "=" * 60)
 print("HA1.3 — COHERENCE DES DATES")
@@ -92,23 +101,26 @@ if "date_creation" in df.columns:
     print(f"Date min :            {df['date_creation'].min()}")
     print(f"Date max :            {df['date_creation'].max()}")
 
-    # Distribution par mois
-    df["mois_creation"] = df["date_creation"].dt.to_period("M")
-    acquisitions_par_mois = df.groupby("mois_creation").size()
-    print(f"\nAcquisitions par mois :")
-    print(acquisitions_par_mois.to_string())
+if "period" in df.columns:
+    print(f"\nPeriod (indice mois bancaire) :")
+    print(f"  Min : {df['period'].min()} ({df['period'].min()})")
+    print(f"  Max : {df['period'].max()} ({df['period'].max()})")
+
+if "annee_acquisition" in df.columns:
+    print(f"\nAcquisitions par annee-trimestre :")
+    vol = df.groupby(["annee_acquisition", "trimestre_acquisition"])["client_id"].count()
+    print(vol.to_string())
 
     fig, ax = plt.subplots(figsize=(14, 5))
-    acquisitions_par_mois.plot(kind="bar", ax=ax, color="steelblue")
-    ax.set_xlabel("Mois")
+    labels = [f"{y}-{q}" for y, q in vol.index]
+    ax.bar(labels, vol.values, color="steelblue", edgecolor="white")
+    ax.set_xlabel("Trimestre")
     ax.set_ylabel("Nombre de nouveaux clients")
-    ax.set_title("Volume d'acquisitions par mois")
+    ax.set_title("Volume d'acquisitions par trimestre")
     ax.grid(axis="y", alpha=0.3)
     plt.xticks(rotation=45)
     plt.tight_layout()
     plt.show()
-else:
-    print("Colonne 'date_creation' non trouvee.")
 
 
 # %% ---- CELL 5: Coherence du PNB ----
@@ -117,8 +129,7 @@ print("\n" + "=" * 60)
 print("HA1.4 — COHERENCE DU PNB")
 print("=" * 60)
 
-# Detect PNB columns
-pnb_cols = [c for c in df.columns if "pnb" in c.lower() or "nbi" in c.lower()]
+pnb_cols = [c for c in df.columns if c.startswith("pnb_")]
 print(f"Colonnes PNB detectees : {pnb_cols}")
 
 if "pnb_12m_total" in df.columns:
@@ -141,6 +152,13 @@ if "pnb_12m_total" in df.columns:
     print(f"\n  Outliers (3x IQR) : {outliers} ({outliers/len(pnb)*100:.1f}%)")
     print(f"  Seuil bas :  {lower:,.0f} EUR")
     print(f"  Seuil haut : {upper:,.0f} EUR")
+
+    # Couverture mensuelle
+    for m in range(1, 13):
+        col = f"pnb_m{m}"
+        if col in df.columns:
+            n_ok = df[col].notna().sum()
+            print(f"  {col}: {n_ok:,} non-null ({n_ok/len(df)*100:.1f}%)")
 
     # Distribution
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
@@ -189,19 +207,18 @@ print("\n" + "=" * 60)
 print("HA1.6 — COUVERTURE DES EQUIPEMENTS")
 print("=" * 60)
 
-equip_cols = [c for c in df.columns if c.startswith("has_") or c.startswith("equip_")
+equip_cols = [c for c in df.columns if c.startswith("has_") or c.startswith("fam_")
               or c in ["n_produits_total", "n_familles_produits"]]
 
 if equip_cols:
     print(f"Colonnes equipements trouvees : {equip_cols}")
     for col in equip_cols:
-        if df[col].dtype in [np.float64, np.int64, float, int]:
-            non_null = df[col].notna().sum()
-            non_zero = (df[col] > 0).sum()
-            print(f"  {col}: {non_null} non-null, {non_zero} > 0 ({non_zero/len(df)*100:.1f}%)")
+        non_null = df[col].notna().sum()
+        non_zero = (df[col] > 0).sum() if df[col].dtype in [np.float64, np.int64, float, int] else 0
+        print(f"  {col}: {non_null:,} non-null, {non_zero:,} > 0 ({non_zero/len(df)*100:.1f}%)")
 else:
     print("Aucune colonne d'equipement detectee.")
-    print("ACTION : verifier si les equipements sont dans un fichier separe.")
+    print("ACTION : verifier que clients_equipement_full.csv est dans 1. DATA/")
 
 
 # %% ---- CELL 8: Resume et verdict ----
