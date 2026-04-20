@@ -7,8 +7,15 @@
 # HA3 : La profession (Jeune Actif / Salarie / Cadre / etc.) apporte-t-elle
 #        un signal predictif au-dela du segment ?
 #
-# Prerequis : df avec colonnes segment, profession, pnb_12m_total
+# Prerequis : executer data_preparation.ipynb -> df_acquisitions.pkl
 # =============================================================================
+
+
+# %% ---- CELL 0: Charger le DataFrame ----
+
+import pickle
+df = pickle.load(open("df_acquisitions.pkl", "rb"))
+print(f"DataFrame charge : {df.shape[0]:,} lignes, {df.shape[1]} colonnes")
 
 
 # %% ---- CELL 1: Imports ----
