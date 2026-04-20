@@ -6,9 +6,16 @@
 # HA9 : Le PNB des nouveaux clients est-il different des clients etablis ?
 # HA10 : Le PNB suit-il une loi de Pareto (concentration) ?
 #
-# Prerequis : df avec pnb_12m_total, date_creation/annee_acquisition, segment
+# Prerequis : executer data_preparation.ipynb -> df_acquisitions.pkl
 #   Pour HA9 : df_etabli (DataFrame des clients etablis avec nbi_annual)
 # =============================================================================
+
+
+# %% ---- CELL 0: Charger le DataFrame ----
+
+import pickle
+df = pickle.load(open("df_acquisitions.pkl", "rb"))
+print(f"DataFrame charge : {df.shape[0]:,} lignes, {df.shape[1]} colonnes")
 
 
 # %% ---- CELL 1: Imports ----
@@ -25,10 +32,7 @@ print("=" * 60)
 print("HA8 — STABILITE DES COHORTES DANS LE TEMPS")
 print("=" * 60)
 
-if "date_creation" in df.columns:
-    df["date_creation"] = pd.to_datetime(df["date_creation"], errors="coerce")
-    df["annee_acquisition"] = df["date_creation"].dt.year
-
+# annee_acquisition deja derive dans data_preparation
 if "annee_acquisition" in df.columns:
     # PNB by cohort year
     cohort_stats = df.groupby("annee_acquisition")["pnb_12m_total"].agg(
