@@ -218,7 +218,7 @@ if equip_cols:
         print(f"  {col}: {non_null:,} non-null, {non_zero:,} > 0 ({non_zero/len(df)*100:.1f}%)")
 else:
     print("Aucune colonne d'equipement detectee.")
-    print("ACTION : verifier que clients_equipement_full.csv est dans 1. DATA/")
+    print("ACTION : verifier que les snapshots trimestriels sont dans 1. DATA/equipements/")
 
 
 # %% ---- CELL 8: Resume et verdict ----
