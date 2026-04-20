@@ -12,8 +12,15 @@
 #   - Ratio PNB precoce / PNB 12 mois
 #   - Stabilite de la correlation par segment
 #
-# Prerequis : df avec pnb_m1..pnb_m12, pnb_12m_total, pnb_cumul_3m, pnb_cumul_6m
+# Prerequis : executer data_preparation.ipynb -> df_acquisitions.pkl
 # =============================================================================
+
+
+# %% ---- CELL 0: Charger le DataFrame ----
+
+import pickle
+df = pickle.load(open("df_acquisitions.pkl", "rb"))
+print(f"DataFrame charge : {df.shape[0]:,} lignes, {df.shape[1]} colonnes")
 
 
 # %% ---- CELL 1: Imports ----
