@@ -33,16 +33,16 @@ print("=" * 60)
 print("HA2 — PNB PAR SEGMENT")
 print("=" * 60)
 
-if "segment" not in df.columns or "pnb_12m_total" not in df.columns:
-    print("ERREUR : colonnes 'segment' et/ou 'pnb_12m_total' manquantes.")
+if "segment" not in df.columns or "pnb_total" not in df.columns:
+    print("ERREUR : colonnes 'segment' et/ou 'pnb_total' manquantes.")
 else:
-    seg_stats = df.groupby("segment")["pnb_12m_total"].agg(
+    seg_stats = df.groupby("segment")["pnb_total"].agg(
         ["count", "mean", "median", "std", "min", "max"]
     ).round(0)
     seg_stats["cv"] = (seg_stats["std"] / seg_stats["mean"]).round(2)
     seg_stats["part_pnb_total"] = (
-        df.groupby("segment")["pnb_12m_total"].sum()
-        / df["pnb_12m_total"].sum() * 100
+        df.groupby("segment")["pnb_total"].sum()
+        / df["pnb_total"].sum() * 100
     ).round(1)
 
     print("\nStatistiques PNB 12 mois par segment :\n")
@@ -63,7 +63,7 @@ print("HA2 — TEST STATISTIQUE (Kruskal-Wallis)")
 print("=" * 60)
 
 segments = df["segment"].unique()
-groups = [df[df["segment"] == s]["pnb_12m_total"].dropna() for s in segments]
+groups = [df[df["segment"] == s]["pnb_total"].dropna() for s in segments]
 
 if len(groups) >= 2:
     stat, p_value = stats.kruskal(*groups)
@@ -78,7 +78,7 @@ if len(groups) >= 2:
         print("-> HA2 NON VALIDEE")
 
     # Effect size (eta-squared)
-    n = len(df["pnb_12m_total"].dropna())
+    n = len(df["pnb_total"].dropna())
     k = len(segments)
     eta_sq = (stat - k + 1) / (n - k)
     print(f"Eta-squared (taille d'effet) : {eta_sq:.4f}")
@@ -95,7 +95,7 @@ if len(groups) >= 2:
 fig, axes = plt.subplots(1, 2, figsize=(16, 6))
 
 # Boxplot
-bp = df.boxplot(column="pnb_12m_total", by="segment", ax=axes[0],
+bp = df.boxplot(column="pnb_total", by="segment", ax=axes[0],
                 patch_artist=True, showfliers=False)
 axes[0].set_title("PNB 12 mois par segment (boxplot)")
 axes[0].set_xlabel("Segment")
@@ -105,7 +105,7 @@ plt.sca(axes[0])
 plt.xticks(rotation=15, ha="right")
 
 # Bar chart des moyennes
-seg_means = df.groupby("segment")["pnb_12m_total"].mean().sort_values(ascending=False)
+seg_means = df.groupby("segment")["pnb_total"].mean().sort_values(ascending=False)
 seg_means.plot(kind="bar", ax=axes[1], color=["#e74c3c", "#3498db", "#2ecc71", "#f39c12"][:len(seg_means)],
                edgecolor="white")
 axes[1].set_title("PNB moyen 12 mois par segment")
@@ -126,7 +126,7 @@ print("HA3 — PNB PAR PROFESSION")
 print("=" * 60)
 
 if "profession" in df.columns:
-    prof_stats = df.groupby("profession")["pnb_12m_total"].agg(
+    prof_stats = df.groupby("profession")["pnb_total"].agg(
         ["count", "mean", "median", "std"]
     ).round(0).sort_values("mean", ascending=False)
 
@@ -135,7 +135,7 @@ if "profession" in df.columns:
 
     # Kruskal-Wallis
     professions = df["profession"].unique()
-    groups_prof = [df[df["profession"] == p]["pnb_12m_total"].dropna() for p in professions]
+    groups_prof = [df[df["profession"] == p]["pnb_total"].dropna() for p in professions]
 
     if len(groups_prof) >= 2:
         stat_p, p_val_p = stats.kruskal(*groups_prof)
@@ -147,7 +147,7 @@ if "profession" in df.columns:
 
     # Bar chart
     fig, ax = plt.subplots(figsize=(12, 6))
-    prof_means = df.groupby("profession")["pnb_12m_total"].mean().sort_values(ascending=True)
+    prof_means = df.groupby("profession")["pnb_total"].mean().sort_values(ascending=True)
     prof_means.plot(kind="barh", ax=ax, color="teal", edgecolor="white")
     ax.set_xlabel("PNB moyen 12 mois (EUR)")
     ax.set_title("PNB moyen par profession")
@@ -165,7 +165,7 @@ print("=" * 60)
 if "segment" in df.columns and "profession" in df.columns:
     # Heatmap des PNB moyens
     pivot = df.pivot_table(
-        values="pnb_12m_total", index="profession", columns="segment",
+        values="pnb_total", index="profession", columns="segment",
         aggfunc="mean"
     ).round(0)
 

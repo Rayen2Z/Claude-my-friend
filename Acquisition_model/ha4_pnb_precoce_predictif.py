@@ -41,19 +41,18 @@ pnb_monthly = sorted(pnb_monthly, key=lambda x: int(x.split("_m")[1]))
 if pnb_monthly:
     print(f"Colonnes PNB mensuelles detectees : {pnb_monthly}")
 
-    # Cumul 3 mois
-    if len(pnb_monthly) >= 3:
+    if "pnb_cumul_3m" not in df.columns and len(pnb_monthly) >= 3:
         df["pnb_cumul_3m"] = df[pnb_monthly[:3]].sum(axis=1)
-    # Cumul 6 mois
-    if len(pnb_monthly) >= 6:
-        df["pnb_cumul_6m"] = df[pnb_monthly[:6]].sum(axis=1)
-    # Total 12 mois
-    if len(pnb_monthly) >= 12 and "pnb_12m_total" not in df.columns:
-        df["pnb_12m_total"] = df[pnb_monthly[:12]].sum(axis=1)
+    if "pnb_cumul_obs" not in df.columns and len(pnb_monthly) >= 6:
+        df["pnb_cumul_obs"] = df[pnb_monthly[:6]].sum(axis=1)
+    if "pnb_total" not in df.columns and len(pnb_monthly) >= 10:
+        df["pnb_total"] = df[pnb_monthly].sum(axis=1)
 
-print(f"PNB cumul 3m : {df['pnb_cumul_3m'].mean():,.0f} EUR (moyenne)")
-print(f"PNB cumul 6m : {df['pnb_cumul_6m'].mean():,.0f} EUR (moyenne)")
-print(f"PNB total 12m: {df['pnb_12m_total'].mean():,.0f} EUR (moyenne)")
+print(f"PNB cumul 3m :  {df['pnb_cumul_3m'].mean():,.0f} EUR (moyenne)")
+print(f"PNB cumul obs : {df['pnb_cumul_obs'].mean():,.0f} EUR (moyenne)")
+print(f"PNB total :     {df['pnb_total'].mean():,.0f} EUR (moyenne)")
+if "n_mois_nbi" in df.columns:
+    print(f"n_mois_nbi :    {df['n_mois_nbi'].value_counts().sort_index().to_string()}")
 
 
 # %% ---- CELL 3: Correlations PNB precoce vs PNB 12 mois ----
@@ -63,11 +62,11 @@ print("HA4 — CORRELATIONS PNB PRECOCE vs PNB 12 MOIS")
 print("=" * 60)
 
 # Pearson correlations
-for cumul_col, label in [("pnb_cumul_3m", "3 mois"), ("pnb_cumul_6m", "6 mois")]:
+for cumul_col, label in [("pnb_cumul_3m", "3 mois"), ("pnb_cumul_obs", "obs (T+1)")]:
     if cumul_col in df.columns:
-        mask = df[cumul_col].notna() & df["pnb_12m_total"].notna()
-        r, p = stats.pearsonr(df.loc[mask, cumul_col], df.loc[mask, "pnb_12m_total"])
-        rho, p_s = stats.spearmanr(df.loc[mask, cumul_col], df.loc[mask, "pnb_12m_total"])
+        mask = df[cumul_col].notna() & df["pnb_total"].notna()
+        r, p = stats.pearsonr(df.loc[mask, cumul_col], df.loc[mask, "pnb_total"])
+        rho, p_s = stats.spearmanr(df.loc[mask, cumul_col], df.loc[mask, "pnb_total"])
         print(f"\nPNB {label} vs PNB 12 mois :")
         print(f"  Pearson r  = {r:.4f}  (p = {p:.2e})")
         print(f"  Spearman rho = {rho:.4f}  (p = {p_s:.2e})")
@@ -86,8 +85,8 @@ print("\nCorrelation progressive (PNB cumule du mois 1 au mois N vs PNB 12 mois)
 correlations = []
 for n in range(1, min(7, len(pnb_monthly) + 1)):
     cumul_n = df[pnb_monthly[:n]].sum(axis=1)
-    mask = cumul_n.notna() & df["pnb_12m_total"].notna()
-    r, _ = stats.pearsonr(cumul_n[mask], df.loc[mask, "pnb_12m_total"])
+    mask = cumul_n.notna() & df["pnb_total"].notna()
+    r, _ = stats.pearsonr(cumul_n[mask], df.loc[mask, "pnb_total"])
     correlations.append({"mois": n, "pearson_r": round(r, 4)})
     print(f"  Mois 1-{n}: r = {r:.4f}")
 
@@ -99,10 +98,10 @@ corr_df = pd.DataFrame(correlations)
 fig, axes = plt.subplots(1, 2, figsize=(16, 7))
 
 for ax, col, label in [(axes[0], "pnb_cumul_3m", "3 mois"),
-                         (axes[1], "pnb_cumul_6m", "6 mois")]:
+                         (axes[1], "pnb_cumul_obs", "obs (T+1)")]:
     if col in df.columns:
-        mask = df[col].notna() & df["pnb_12m_total"].notna()
-        x, y = df.loc[mask, col], df.loc[mask, "pnb_12m_total"]
+        mask = df[col].notna() & df["pnb_total"].notna()
+        x, y = df.loc[mask, col], df.loc[mask, "pnb_total"]
 
         ax.scatter(x, y, alpha=0.15, s=8, color="steelblue")
 
@@ -148,11 +147,11 @@ print("\n" + "=" * 60)
 print("HA4 — REGRESSION LINEAIRE SIMPLE")
 print("=" * 60)
 
-for col, label in [("pnb_cumul_3m", "3 mois"), ("pnb_cumul_6m", "6 mois")]:
+for col, label in [("pnb_cumul_3m", "3 mois"), ("pnb_cumul_obs", "obs (T+1)")]:
     if col in df.columns:
-        mask = df[col].notna() & df["pnb_12m_total"].notna()
+        mask = df[col].notna() & df["pnb_total"].notna()
         X_lr = df.loc[mask, col].values.reshape(-1, 1)
-        y_lr = df.loc[mask, "pnb_12m_total"].values
+        y_lr = df.loc[mask, "pnb_total"].values
 
         lr = LinearRegression().fit(X_lr, y_lr)
         y_pred = lr.predict(X_lr)
@@ -172,17 +171,17 @@ print("\n" + "=" * 60)
 print("HA4 — RATIO PNB PRECOCE / PNB 12 MOIS")
 print("=" * 60)
 
-for col, label in [("pnb_cumul_3m", "3 mois"), ("pnb_cumul_6m", "6 mois")]:
+for col, label in [("pnb_cumul_3m", "3 mois"), ("pnb_cumul_obs", "obs (T+1)")]:
     if col in df.columns:
-        mask = (df["pnb_12m_total"] > 0) & df[col].notna()
-        ratio = df.loc[mask, col] / df.loc[mask, "pnb_12m_total"]
+        mask = (df["pnb_total"] > 0) & df[col].notna()
+        ratio = df.loc[mask, col] / df.loc[mask, "pnb_total"]
 
         print(f"\nRatio PNB {label} / PNB 12 mois (clients PNB > 0) :")
         print(f"  Mean :   {ratio.mean():.2%}")
         print(f"  Median : {ratio.median():.2%}")
         print(f"  Std :    {ratio.std():.2%}")
 
-        if label == "6 mois":
+        if label == "obs (T+1)":
             print(f"  -> En moyenne, {ratio.mean():.0%} du PNB 12 mois est realise dans les 6 premiers mois")
 
 
@@ -192,13 +191,13 @@ print("\n" + "=" * 60)
 print("HA4 — CORRELATION PAR SEGMENT")
 print("=" * 60)
 
-if "segment" in df.columns and "pnb_cumul_6m" in df.columns:
+if "segment" in df.columns and "pnb_cumul_obs" in df.columns:
     for seg in sorted(df["segment"].unique()):
         seg_df = df[df["segment"] == seg]
-        mask = seg_df["pnb_cumul_6m"].notna() & seg_df["pnb_12m_total"].notna()
+        mask = seg_df["pnb_cumul_obs"].notna() & seg_df["pnb_total"].notna()
         if mask.sum() > 10:
-            r, p = stats.pearsonr(seg_df.loc[mask, "pnb_cumul_6m"],
-                                   seg_df.loc[mask, "pnb_12m_total"])
+            r, p = stats.pearsonr(seg_df.loc[mask, "pnb_cumul_obs"],
+                                   seg_df.loc[mask, "pnb_total"])
             print(f"  {seg}: r = {r:.4f} (n={mask.sum()}, p={p:.2e})")
 
     print("\n  -> Si les correlations sont stables entre segments,")

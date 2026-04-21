@@ -35,7 +35,7 @@ print("=" * 60)
 # annee_acquisition deja derive dans data_preparation
 if "annee_acquisition" in df.columns:
     # PNB by cohort year
-    cohort_stats = df.groupby("annee_acquisition")["pnb_12m_total"].agg(
+    cohort_stats = df.groupby("annee_acquisition")["pnb_total"].agg(
         ["count", "mean", "median", "std"]
     ).round(0)
     print("\nPNB 12 mois par cohorte annuelle :\n")
@@ -54,8 +54,8 @@ if "annee_acquisition" in df.columns:
     # KS test between consecutive cohorts
     print("\nTests de Kolmogorov-Smirnov (stabilite des distributions) :")
     for i in range(1, len(years)):
-        g1 = df[df["annee_acquisition"] == years[i-1]]["pnb_12m_total"].dropna()
-        g2 = df[df["annee_acquisition"] == years[i]]["pnb_12m_total"].dropna()
+        g1 = df[df["annee_acquisition"] == years[i-1]]["pnb_total"].dropna()
+        g2 = df[df["annee_acquisition"] == years[i]]["pnb_total"].dropna()
         if len(g1) > 10 and len(g2) > 10:
             ks_stat, ks_p = stats.ks_2samp(g1, g2)
             verdict = "DIFFERENTES" if ks_p < 0.05 else "SIMILAIRES"
@@ -65,7 +65,7 @@ if "annee_acquisition" in df.columns:
     fig, axes = plt.subplots(1, 2, figsize=(16, 6))
 
     for year in years:
-        subset = df[df["annee_acquisition"] == year]["pnb_12m_total"].dropna()
+        subset = df[df["annee_acquisition"] == year]["pnb_total"].dropna()
         if len(subset) > 0:
             axes[0].hist(subset.clip(-2000, 15000), bins=50, alpha=0.4, label=str(year))
 
@@ -76,7 +76,7 @@ if "annee_acquisition" in df.columns:
     axes[0].grid(alpha=0.3)
 
     # Box plot by cohort
-    df.boxplot(column="pnb_12m_total", by="annee_acquisition", ax=axes[1],
+    df.boxplot(column="pnb_total", by="annee_acquisition", ax=axes[1],
                showfliers=False, patch_artist=True)
     axes[1].set_xlabel("Annee d'acquisition")
     axes[1].set_ylabel("PNB 12 mois (EUR)")
@@ -131,7 +131,7 @@ except NameError:
     pnb_etabli = None
 
 if pnb_etabli is not None:
-    pnb_new = df["pnb_12m_total"].dropna()
+    pnb_new = df["pnb_total"].dropna()
 
     print(f"\nNouvelles acquisitions (n={len(pnb_new):,}):")
     print(f"  PNB moyen :  {pnb_new.mean():,.0f} EUR")
@@ -185,7 +185,7 @@ print("\n" + "=" * 60)
 print("HA10 — CONCENTRATION DU PNB (LOI DE PARETO)")
 print("=" * 60)
 
-pnb = df["pnb_12m_total"].dropna()
+pnb = df["pnb_total"].dropna()
 pnb_positive = pnb[pnb > 0].sort_values(ascending=False)
 
 n = len(pnb_positive)
@@ -248,7 +248,7 @@ print("=" * 60)
 
 if "segment" in df.columns:
     for seg in sorted(df["segment"].unique()):
-        seg_pnb = df[df["segment"] == seg]["pnb_12m_total"].dropna()
+        seg_pnb = df[df["segment"] == seg]["pnb_total"].dropna()
         seg_positive = seg_pnb[seg_pnb > 0].sort_values(ascending=False)
         if len(seg_positive) > 10:
             seg_gini = gini_coefficient(seg_positive.values)

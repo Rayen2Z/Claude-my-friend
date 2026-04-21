@@ -29,12 +29,19 @@ from scipy import stats
 
 # %% ---- CELL 2: Detecter les colonnes d'equipement ----
 
-# Auto-detect equipment columns
-equip_binary = [c for c in df.columns if c.startswith("has_")]
-equip_count = [c for c in df.columns if "n_produits" in c or "n_familles" in c]
+# Auto-detect equipment columns (qty_* = quantities from snapshot)
+equip_qty = [c for c in df.columns if c.startswith("qty_")]
+equip_count = [c for c in df.columns if "n_produits" in c]
 
-print("Colonnes equipement (binaires) :", equip_binary)
+print("Colonnes equipement (quantites) :", equip_qty)
 print("Colonnes equipement (comptage) :", equip_count)
+
+# Binary view for impact analysis: qty > 0
+equip_binary = []
+for col in equip_qty:
+    bin_col = col.replace("qty_", "has_")
+    df[bin_col] = (df[col].fillna(0) > 0).astype(int)
+    equip_binary.append(bin_col)
 
 # If equipment columns don't exist, try to detect product columns by name
 if not equip_binary:
@@ -59,30 +66,30 @@ elif equip_binary:
     count_col = "n_produits_total"
 
 if count_col:
-    prod_stats = df.groupby(count_col)["pnb_12m_total"].agg(
+    prod_stats = df.groupby(count_col)["pnb_total"].agg(
         ["count", "mean", "median", "std"]
     ).round(0)
     print("\nPNB 12 mois par nombre de produits :\n")
     print(prod_stats.to_string())
 
     # Correlation
-    mask = df[count_col].notna() & df["pnb_12m_total"].notna()
-    r, p = stats.pearsonr(df.loc[mask, count_col], df.loc[mask, "pnb_12m_total"])
-    rho, p_s = stats.spearmanr(df.loc[mask, count_col], df.loc[mask, "pnb_12m_total"])
+    mask = df[count_col].notna() & df["pnb_total"].notna()
+    r, p = stats.pearsonr(df.loc[mask, count_col], df.loc[mask, "pnb_total"])
+    rho, p_s = stats.spearmanr(df.loc[mask, count_col], df.loc[mask, "pnb_total"])
     print(f"\nPearson r (n_produits vs PNB 12m) :  {r:.4f} (p={p:.2e})")
     print(f"Spearman rho :                       {rho:.4f} (p={p_s:.2e})")
 
     # Plot
     fig, axes = plt.subplots(1, 2, figsize=(16, 6))
 
-    prod_means = df.groupby(count_col)["pnb_12m_total"].mean()
+    prod_means = df.groupby(count_col)["pnb_total"].mean()
     prod_means.plot(kind="bar", ax=axes[0], color="steelblue", edgecolor="white")
     axes[0].set_xlabel("Nombre de produits")
     axes[0].set_ylabel("PNB moyen 12 mois (EUR)")
     axes[0].set_title("PNB moyen par nombre de produits")
     axes[0].grid(axis="y", alpha=0.3)
 
-    df.boxplot(column="pnb_12m_total", by=count_col, ax=axes[1], showfliers=False,
+    df.boxplot(column="pnb_total", by=count_col, ax=axes[1], showfliers=False,
                patch_artist=True)
     axes[1].set_xlabel("Nombre de produits")
     axes[1].set_ylabel("PNB 12 mois (EUR)")
@@ -104,8 +111,8 @@ if equip_binary:
     product_impact = []
     for prod in equip_binary:
         if df[prod].notna().any():
-            with_prod = df[df[prod] == 1]["pnb_12m_total"]
-            without_prod = df[df[prod] == 0]["pnb_12m_total"]
+            with_prod = df[df[prod] == 1]["pnb_total"]
+            without_prod = df[df[prod] == 0]["pnb_total"]
 
             if len(with_prod) > 5 and len(without_prod) > 5:
                 diff = with_prod.mean() - without_prod.mean()
@@ -166,8 +173,8 @@ for c in ["a_domiciliation_salaire", "has_domiciliation", "domiciliation_salaire
         break
 
 if dom_col:
-    with_dom = df[df[dom_col] == 1]["pnb_12m_total"]
-    without_dom = df[df[dom_col] == 0]["pnb_12m_total"]
+    with_dom = df[df[dom_col] == 1]["pnb_total"]
+    without_dom = df[df[dom_col] == 0]["pnb_total"]
 
     print(f"Avec domiciliation :   n={len(with_dom):,}, PNB moyen={with_dom.mean():,.0f} EUR")
     print(f"Sans domiciliation :   n={len(without_dom):,}, PNB moyen={without_dom.mean():,.0f} EUR")
@@ -188,7 +195,7 @@ print("=" * 60)
 
 if "segment" in df.columns and count_col:
     pivot_prod_seg = df.pivot_table(
-        values="pnb_12m_total", index=count_col, columns="segment",
+        values="pnb_total", index=count_col, columns="segment",
         aggfunc="mean"
     ).round(0)
 
@@ -254,8 +261,8 @@ if equip_binary and len(equip_binary) >= 2:
 
     combo_stats = df.groupby("combo_produits").agg(
         n_clients=("client_id", "count"),
-        pnb_moyen=("pnb_12m_total", "mean"),
-        pnb_median=("pnb_12m_total", "median"),
+        pnb_moyen=("pnb_total", "mean"),
+        pnb_median=("pnb_total", "median"),
     ).round(0).sort_values("n_clients", ascending=False)
 
     # Top 15 combinations
@@ -289,10 +296,10 @@ from sklearn.metrics import r2_score
 results_comparison = []
 
 # Model 1: PNB cumule seul
-if "pnb_cumul_6m" in df.columns:
-    mask = df["pnb_cumul_6m"].notna() & df["pnb_12m_total"].notna()
-    X1 = df.loc[mask, "pnb_cumul_6m"].values.reshape(-1, 1)
-    y = df.loc[mask, "pnb_12m_total"].values
+if "pnb_cumul_obs" in df.columns:
+    mask = df["pnb_cumul_obs"].notna() & df["pnb_total"].notna()
+    X1 = df.loc[mask, "pnb_cumul_obs"].values.reshape(-1, 1)
+    y = df.loc[mask, "pnb_total"].values
     lr1 = LinearRegression().fit(X1, y)
     r2_pnb = r2_score(y, lr1.predict(X1))
     results_comparison.append({"modele": "PNB 6 mois seul", "r2": r2_pnb})
@@ -301,20 +308,20 @@ if "pnb_cumul_6m" in df.columns:
 if count_col and equip_binary:
     feat_equip = [count_col] + equip_binary
     feat_equip = [c for c in feat_equip if c in df.columns]
-    mask = df[feat_equip + ["pnb_12m_total"]].notna().all(axis=1)
+    mask = df[feat_equip + ["pnb_total"]].notna().all(axis=1)
     X2 = df.loc[mask, feat_equip].values
-    y2 = df.loc[mask, "pnb_12m_total"].values
+    y2 = df.loc[mask, "pnb_total"].values
     lr2 = LinearRegression().fit(X2, y2)
     r2_equip = r2_score(y2, lr2.predict(X2))
     results_comparison.append({"modele": "Equipements seuls", "r2": r2_equip})
 
 # Model 3: PNB + Equipements combines
-if "pnb_cumul_6m" in df.columns and equip_binary:
-    feat_all = ["pnb_cumul_6m"] + [count_col] + equip_binary
+if "pnb_cumul_obs" in df.columns and equip_binary:
+    feat_all = ["pnb_cumul_obs"] + [count_col] + equip_binary
     feat_all = [c for c in feat_all if c in df.columns]
-    mask = df[feat_all + ["pnb_12m_total"]].notna().all(axis=1)
+    mask = df[feat_all + ["pnb_total"]].notna().all(axis=1)
     X3 = df.loc[mask, feat_all].values
-    y3 = df.loc[mask, "pnb_12m_total"].values
+    y3 = df.loc[mask, "pnb_total"].values
     lr3 = LinearRegression().fit(X3, y3)
     r2_combined = r2_score(y3, lr3.predict(X3))
     results_comparison.append({"modele": "PNB + Equipements", "r2": r2_combined})

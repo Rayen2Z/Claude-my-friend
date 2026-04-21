@@ -76,8 +76,8 @@ if len(pnb_monthly) >= 3:
     # Stats per profile
     traj_stats = df.groupby("profil_trajectoire").agg(
         n_clients=("client_id", "count"),
-        pnb_moyen_12m=("pnb_12m_total", "mean"),
-        pnb_median_12m=("pnb_12m_total", "median"),
+        pnb_moyen_12m=("pnb_total", "mean"),
+        pnb_median_12m=("pnb_total", "median"),
         pnb_pente_moy=("pnb_pente", "mean"),
     ).round(0)
 
@@ -86,7 +86,7 @@ if len(pnb_monthly) >= 3:
 
     # Kruskal-Wallis between trajectory profiles
     profiles = df["profil_trajectoire"].unique()
-    groups = [df[df["profil_trajectoire"] == p]["pnb_12m_total"].dropna() for p in profiles]
+    groups = [df[df["profil_trajectoire"] == p]["pnb_total"].dropna() for p in profiles]
     groups = [g for g in groups if len(g) > 5]
     if len(groups) >= 2:
         h_stat, h_p = stats.kruskal(*groups)
@@ -112,7 +112,7 @@ if len(pnb_monthly) >= 3:
     axes[0].grid(alpha=0.3)
 
     # Bar chart PNB 12m by profile
-    traj_means = df.groupby("profil_trajectoire")["pnb_12m_total"].mean().sort_values(ascending=True)
+    traj_means = df.groupby("profil_trajectoire")["pnb_total"].mean().sort_values(ascending=True)
     colors = {"dormant": "#e74c3c", "decroissant": "#f39c12",
               "stable": "#3498db", "croissant": "#2ecc71"}
     bar_colors = [colors.get(p, "#95a5a6") for p in traj_means.index]
@@ -154,14 +154,14 @@ if len(pnb_monthly) >= 3:
     n_total = len(df)
 
     print(f"Slow starters :   {n_slow:,} ({n_slow/n_total*100:.1f}%)")
-    print(f"  PNB 12m moyen : {df[df['is_slow_starter']==1]['pnb_12m_total'].mean():,.0f} EUR")
+    print(f"  PNB 12m moyen : {df[df['is_slow_starter']==1]['pnb_total'].mean():,.0f} EUR")
 
     print(f"\nEarly peaks :     {n_peak:,} ({n_peak/n_total*100:.1f}%)")
-    print(f"  PNB 12m moyen : {df[df['is_early_peak']==1]['pnb_12m_total'].mean():,.0f} EUR")
+    print(f"  PNB 12m moyen : {df[df['is_early_peak']==1]['pnb_total'].mean():,.0f} EUR")
 
     print(f"\nAutres :          {n_total - n_slow - n_peak:,}")
     others_mask = (df["is_slow_starter"] == 0) & (df["is_early_peak"] == 0)
-    print(f"  PNB 12m moyen : {df[others_mask]['pnb_12m_total'].mean():,.0f} EUR")
+    print(f"  PNB 12m moyen : {df[others_mask]['pnb_total'].mean():,.0f} EUR")
 
     print("\n-> Les slow starters rattrapent-ils leur retard sur 12 mois ?")
     print("   Si oui, le modele ne doit pas penaliser un PNB faible au mois 1.")
@@ -175,17 +175,17 @@ print("=" * 60)
 
 from sklearn.metrics import r2_score
 
-if "pnb_cumul_6m" in df.columns and "pnb_pente" in df.columns:
-    mask = df[["pnb_cumul_6m", "pnb_pente", "pnb_12m_total"]].notna().all(axis=1)
+if "pnb_cumul_obs" in df.columns and "pnb_pente" in df.columns:
+    mask = df[["pnb_cumul_obs", "pnb_pente", "pnb_total"]].notna().all(axis=1)
 
     # Model 1: cumul seul
-    X1 = df.loc[mask, ["pnb_cumul_6m"]].values
-    y = df.loc[mask, "pnb_12m_total"].values
+    X1 = df.loc[mask, ["pnb_cumul_obs"]].values
+    y = df.loc[mask, "pnb_total"].values
     lr1 = LinearRegression().fit(X1, y)
     r2_cumul = r2_score(y, lr1.predict(X1))
 
     # Model 2: cumul + tendance + volatilite
-    feat = ["pnb_cumul_6m", "pnb_pente", "pnb_volatilite_mensuelle", "mois_pnb_positif"]
+    feat = ["pnb_cumul_obs", "pnb_pente", "pnb_volatilite_mensuelle", "mois_pnb_positif"]
     feat = [f for f in feat if f in df.columns]
     X2 = df.loc[mask, feat].values
     lr2 = LinearRegression().fit(X2, y)
@@ -212,7 +212,7 @@ if "trimestre_acquisition" not in df.columns:
     print("Colonne trimestre_acquisition non trouvee. Executer data_preparation.ipynb.")
 
 if "trimestre_acquisition" in df.columns:
-    q_stats = df.groupby("trimestre_acquisition")["pnb_12m_total"].agg(
+    q_stats = df.groupby("trimestre_acquisition")["pnb_total"].agg(
         ["count", "mean", "median", "std"]
     ).round(0)
     print("\nPNB 12 mois par trimestre d'acquisition :\n")
@@ -220,7 +220,7 @@ if "trimestre_acquisition" in df.columns:
 
     # Kruskal-Wallis
     quarters = ["Q1", "Q2", "Q3", "Q4"]
-    q_groups = [df[df["trimestre_acquisition"] == q]["pnb_12m_total"].dropna()
+    q_groups = [df[df["trimestre_acquisition"] == q]["pnb_total"].dropna()
                 for q in quarters if q in df["trimestre_acquisition"].values]
     if len(q_groups) >= 2:
         h_stat, h_p = stats.kruskal(*q_groups)
@@ -233,7 +233,7 @@ if "trimestre_acquisition" in df.columns:
     # Plot
     fig, axes = plt.subplots(1, 2, figsize=(16, 6))
 
-    q_means = df.groupby("trimestre_acquisition")["pnb_12m_total"].mean()
+    q_means = df.groupby("trimestre_acquisition")["pnb_total"].mean()
     q_means.reindex(["Q1", "Q2", "Q3", "Q4"]).plot(kind="bar", ax=axes[0],
         color=["#3498db", "#2ecc71", "#f39c12", "#e74c3c"], edgecolor="white")
     axes[0].set_ylabel("PNB moyen 12 mois (EUR)")
@@ -245,7 +245,7 @@ if "trimestre_acquisition" in df.columns:
     # By year and quarter
     if "annee_acquisition" in df.columns:
         pivot_yq = df.pivot_table(
-            values="pnb_12m_total", index="trimestre_acquisition",
+            values="pnb_total", index="trimestre_acquisition",
             columns="annee_acquisition", aggfunc="mean"
         ).round(0)
         pivot_yq.reindex(["Q1", "Q2", "Q3", "Q4"]).plot(kind="bar", ax=axes[1], edgecolor="white")
@@ -270,7 +270,7 @@ if "annee_acquisition" in df.columns and "trimestre_acquisition" in df.columns:
     years = sorted(df["annee_acquisition"].unique())
     for year in years:
         yr_data = df[df["annee_acquisition"] == year]
-        q_means_yr = yr_data.groupby("trimestre_acquisition")["pnb_12m_total"].mean()
+        q_means_yr = yr_data.groupby("trimestre_acquisition")["pnb_total"].mean()
         best_q = q_means_yr.idxmax() if len(q_means_yr) > 0 else "?"
         worst_q = q_means_yr.idxmin() if len(q_means_yr) > 0 else "?"
         print(f"  {year}: meilleur={best_q}, plus faible={worst_q}")

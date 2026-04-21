@@ -132,8 +132,8 @@ print("=" * 60)
 pnb_cols = [c for c in df.columns if c.startswith("pnb_")]
 print(f"Colonnes PNB detectees : {pnb_cols}")
 
-if "pnb_12m_total" in df.columns:
-    pnb = df["pnb_12m_total"]
+if "pnb_total" in df.columns:
+    pnb = df["pnb_total"]
     print(f"\nPNB 12 mois :")
     print(f"  Count :   {pnb.notna().sum():,}")
     print(f"  Mean :    {pnb.mean():,.0f} EUR")
@@ -207,8 +207,8 @@ print("\n" + "=" * 60)
 print("HA1.6 — COUVERTURE DES EQUIPEMENTS")
 print("=" * 60)
 
-equip_cols = [c for c in df.columns if c.startswith("has_") or c.startswith("fam_")
-              or c in ["n_produits_total", "n_familles_produits"]]
+equip_cols = [c for c in df.columns if c.startswith("qty_")
+              or c in ["n_produits_total"]]
 
 if equip_cols:
     print(f"Colonnes equipements trouvees : {equip_cols}")
