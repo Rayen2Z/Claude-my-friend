@@ -2,9 +2,16 @@
 # HA6 + HA7 — Dynamique Temporelle du PNB et Saisonnalite
 # =============================================================================
 #
-# HA6 : La trajectoire du PNB mensuel (croissante, stable, decroissante)
-#        apporte-t-elle un signal au-dela du niveau cumule ?
-# HA7 : Le trimestre d'acquisition influence-t-il le PNB a 12 mois ?
+# HA6 : La trajectoire du PNB mensuel pendant la fenetre d'observation
+#        (croissante, stable, decroissante) apporte-t-elle un signal au-dela
+#        du niveau cumule ?
+#        NOTE : la pente est estimee sur 4 a 6 points selon n_mois_observation,
+#        ce qui affecte la fiabilite.
+#
+# HA7 : Le trimestre d'acquisition influence-t-il le PNB ?
+#        ATTENTION : comparer le PNB brut melange le signal saisonnier et
+#        l'artefact de duree (n_mois_nbi varie de 10 a 12). Toujours utiliser
+#        pnb_mensuel_moyen pour les comparaisons inter-trimestres.
 #
 # Prerequis : executer data_preparation.ipynb -> df_acquisitions.pkl
 # =============================================================================
@@ -212,19 +219,34 @@ if "trimestre_acquisition" not in df.columns:
     print("Colonne trimestre_acquisition non trouvee. Executer data_preparation.ipynb.")
 
 if "trimestre_acquisition" in df.columns:
+    # PNB brut (reference)
     q_stats = df.groupby("trimestre_acquisition")["pnb_total"].agg(
         ["count", "mean", "median", "std"]
     ).round(0)
-    print("\nPNB 12 mois par trimestre d'acquisition :\n")
+    print("\nPNB total (brut) par trimestre d'acquisition :\n")
     print(q_stats.to_string())
 
-    # Kruskal-Wallis
+    # PNB mensuel moyen (controle pour n_mois_nbi)
+    if "pnb_mensuel_moyen" in df.columns:
+        q_stats_norm = df.groupby("trimestre_acquisition")["pnb_mensuel_moyen"].agg(
+            ["count", "mean", "median", "std"]
+        ).round(0)
+        print("\nPNB mensuel moyen (normalise par n_mois_nbi) par trimestre :\n")
+        print(q_stats_norm.to_string())
+
+        # Distribution de n_mois_nbi par trimestre (pour montrer le biais potentiel)
+        if "n_mois_nbi" in df.columns:
+            nbi_by_q = df.groupby("trimestre_acquisition")["n_mois_nbi"].mean().round(2)
+            print(f"\nn_mois_nbi moyen par trimestre : {nbi_by_q.to_dict()}")
+
+    # Kruskal-Wallis sur PNB mensuel moyen (plus fiable que PNB brut)
     quarters = ["Q1", "Q2", "Q3", "Q4"]
-    q_groups = [df[df["trimestre_acquisition"] == q]["pnb_total"].dropna()
+    target_col = "pnb_mensuel_moyen" if "pnb_mensuel_moyen" in df.columns else "pnb_total"
+    q_groups = [df[df["trimestre_acquisition"] == q][target_col].dropna()
                 for q in quarters if q in df["trimestre_acquisition"].values]
     if len(q_groups) >= 2:
         h_stat, h_p = stats.kruskal(*q_groups)
-        print(f"\nKruskal-Wallis : H={h_stat:.2f}, p={h_p:.6f}")
+        print(f"\nKruskal-Wallis (sur {target_col}) : H={h_stat:.2f}, p={h_p:.6f}")
         if h_p < 0.05:
             print("-> HA7 VALIDEE : la saisonnalite impacte significativement le PNB")
         else:
@@ -233,11 +255,12 @@ if "trimestre_acquisition" in df.columns:
     # Plot
     fig, axes = plt.subplots(1, 2, figsize=(16, 6))
 
-    q_means = df.groupby("trimestre_acquisition")["pnb_total"].mean()
+    plot_col = "pnb_mensuel_moyen" if "pnb_mensuel_moyen" in df.columns else "pnb_total"
+    q_means = df.groupby("trimestre_acquisition")[plot_col].mean()
     q_means.reindex(["Q1", "Q2", "Q3", "Q4"]).plot(kind="bar", ax=axes[0],
         color=["#3498db", "#2ecc71", "#f39c12", "#e74c3c"], edgecolor="white")
-    axes[0].set_ylabel("PNB moyen 12 mois (EUR)")
-    axes[0].set_title("PNB moyen par trimestre d'acquisition")
+    axes[0].set_ylabel("PNB mensuel moyen (EUR)")
+    axes[0].set_title("PNB mensuel moyen par trimestre d'acquisition")
     axes[0].grid(axis="y", alpha=0.3)
     plt.sca(axes[0])
     plt.xticks(rotation=0)
@@ -245,12 +268,12 @@ if "trimestre_acquisition" in df.columns:
     # By year and quarter
     if "annee_acquisition" in df.columns:
         pivot_yq = df.pivot_table(
-            values="pnb_total", index="trimestre_acquisition",
+            values=plot_col, index="trimestre_acquisition",
             columns="annee_acquisition", aggfunc="mean"
         ).round(0)
         pivot_yq.reindex(["Q1", "Q2", "Q3", "Q4"]).plot(kind="bar", ax=axes[1], edgecolor="white")
-        axes[1].set_ylabel("PNB moyen 12 mois (EUR)")
-        axes[1].set_title("PNB par trimestre et annee")
+        axes[1].set_ylabel("PNB mensuel moyen (EUR)")
+        axes[1].set_title("PNB mensuel moyen par trimestre et annee")
         axes[1].legend(title="Annee")
         axes[1].grid(axis="y", alpha=0.3)
         plt.sca(axes[1])

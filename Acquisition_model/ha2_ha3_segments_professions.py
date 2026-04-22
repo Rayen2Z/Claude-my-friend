@@ -3,9 +3,13 @@
 # =============================================================================
 #
 # HA2 : Le segment (Mass Affluent / Mass Retail / MR with Potential) est-il
-#        significativement correle au PNB a 12 mois ?
+#        significativement correle au PNB ?
 # HA3 : La profession (Jeune Actif / Salarie / Cadre / etc.) apporte-t-elle
 #        un signal predictif au-dela du segment ?
+#
+# NOTE T/T+1/T+3 : les comparaisons de PNB brut peuvent etre biaisees si
+# la repartition de n_mois_nbi differe entre segments/professions. Les tests
+# statistiques devraient idealement porter sur pnb_mensuel_moyen.
 #
 # Prerequis : executer data_preparation.ipynb -> df_acquisitions.pkl
 # =============================================================================

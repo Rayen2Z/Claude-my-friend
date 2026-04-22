@@ -2,9 +2,14 @@
 # HA8 + HA9 + HA10 — Stabilite des Cohortes, Comparaison, Concentration
 # =============================================================================
 #
-# HA8 : Les cohortes sont-elles stables dans le temps (pas de derive) ?
+# HA8 : Les cohortes trimestrielles sont-elles stables dans le temps ?
+#        Utiliser pnb_mensuel_moyen et non pnb_total brut pour controler
+#        la duree variable (n_mois_nbi). 9+ cohortes trimestrielles disponibles.
 # HA9 : Le PNB des nouveaux clients est-il different des clients etablis ?
+#        Annualiser le PNB des nouveaux (pnb_mensuel_moyen * 12) pour comparer.
 # HA10 : Le PNB suit-il une loi de Pareto (concentration) ?
+#         Executer separement par n_mois_nbi pour verifier que la forme
+#         n'est pas un artefact de la duree variable.
 #
 # Prerequis : executer data_preparation.ipynb -> df_acquisitions.pkl
 #   Pour HA9 : df_etabli (DataFrame des clients etablis avec nbi_annual)

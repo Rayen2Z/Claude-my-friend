@@ -8,6 +8,8 @@
 #   - Coherence des dates et du PNB
 #   - Couverture des equipements
 #   - Distribution des variables categorielles
+#   - Distribution de n_mois_nbi (10, 11, 12) et n_mois_observation (4, 5, 6)
+#   - NaN attendus dans pnb_m11/pnb_m12 pour clients avec n_mois_nbi < 11/12
 #
 # Prerequis : executer data_preparation.ipynb -> df_acquisitions.pkl
 # =============================================================================

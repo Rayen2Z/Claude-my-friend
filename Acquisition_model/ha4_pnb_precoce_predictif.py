@@ -1,15 +1,21 @@
 # =============================================================================
-# HA4 — Le PNB des 3-6 premiers mois est predictif du PNB a 12 mois
+# HA4 — Le PNB d'observation est predictif du PNB total
 # =============================================================================
 #
-# C'est l'hypothese FONDAMENTALE du modele. Si le PNB precoce n'est pas
-# correle au PNB a 12 mois, le modele n'a aucune base.
+# C'est l'hypothese FONDAMENTALE du modele. Si le PNB de la fenetre
+# d'observation (T→T+1) n'est pas correle au PNB total (T→T+3),
+# le modele n'a aucune base.
+#
+# ATTENTION : pnb_cumul_obs est un sous-ensemble de pnb_total, ce qui cree
+# un plancher mecanique de correlation. L'analyse distingue :
+#   - HA4a : correlation brute pnb_cumul_obs vs pnb_total (reference)
+#   - HA4b : correlation nette pnb_cumul_obs vs pnb_remaining (signal reel)
 #
 # Analyse :
-#   - Correlation PNB 3 mois vs PNB 12 mois
-#   - Correlation PNB 6 mois vs PNB 12 mois
-#   - R2 d'une regression lineaire simple
-#   - Ratio PNB precoce / PNB 12 mois
+#   - Correlation PNB 3 mois et PNB obs vs PNB total
+#   - Correlation PNB obs vs PNB remaining (au-dela du plancher mecanique)
+#   - R2 d'une regression lineaire simple (total et remaining)
+#   - Ratio PNB obs / PNB total
 #   - Stabilite de la correlation par segment
 #
 # Prerequis : executer data_preparation.ipynb -> df_acquisitions.pkl
@@ -159,16 +165,80 @@ for col, label in [("pnb_cumul_3m", "3 mois"), ("pnb_cumul_obs", "obs (T+1)")]:
         r2 = r2_score(y_lr, y_pred)
         mae = mean_absolute_error(y_lr, y_pred)
 
-        print(f"\nRegression PNB {label} -> PNB 12 mois :")
+        print(f"\nRegression PNB {label} -> PNB total :")
         print(f"  R2 :  {r2:.4f}")
         print(f"  MAE : {mae:,.0f} EUR")
-        print(f"  -> Le PNB {label} seul explique {r2*100:.1f}% de la variance du PNB 12 mois")
+        print(f"  -> Le PNB {label} seul explique {r2*100:.1f}% de la variance du PNB total")
 
 
-# %% ---- CELL 7: Ratio PNB precoce / PNB 12 mois ----
+# %% ---- CELL 6b: HA4b — Correlation nette : pnb_cumul_obs vs pnb_remaining ----
 
 print("\n" + "=" * 60)
-print("HA4 — RATIO PNB PRECOCE / PNB 12 MOIS")
+print("HA4b — SIGNAL REEL : PNB OBS vs PNB REMAINING")
+print("=" * 60)
+
+if "pnb_remaining" in df.columns and "pnb_cumul_obs" in df.columns:
+    mask = df["pnb_cumul_obs"].notna() & df["pnb_remaining"].notna()
+    r_net, p_net = stats.pearsonr(df.loc[mask, "pnb_cumul_obs"], df.loc[mask, "pnb_remaining"])
+    rho_net, p_s_net = stats.spearmanr(df.loc[mask, "pnb_cumul_obs"], df.loc[mask, "pnb_remaining"])
+
+    print(f"\nPNB obs vs PNB remaining (partie non observee) :")
+    print(f"  Pearson r  = {r_net:.4f}  (p = {p_net:.2e})")
+    print(f"  Spearman rho = {rho_net:.4f}  (p = {p_s_net:.2e})")
+
+    # R2 regression pnb_cumul_obs -> pnb_remaining
+    X_rem = df.loc[mask, "pnb_cumul_obs"].values.reshape(-1, 1)
+    y_rem = df.loc[mask, "pnb_remaining"].values
+    lr_rem = LinearRegression().fit(X_rem, y_rem)
+    r2_rem = r2_score(y_rem, lr_rem.predict(X_rem))
+    mae_rem = mean_absolute_error(y_rem, lr_rem.predict(X_rem))
+
+    print(f"\nRegression PNB obs -> PNB remaining :")
+    print(f"  R2 :  {r2_rem:.4f}")
+    print(f"  MAE : {mae_rem:,.0f} EUR")
+
+    # Compare with brute correlation
+    r_brut, _ = stats.pearsonr(df.loc[mask, "pnb_cumul_obs"], df.loc[mask, "pnb_total"])
+    print(f"\nComparaison :")
+    print(f"  r(obs, total)     = {r_brut:.4f}  (inclut le plancher mecanique)")
+    print(f"  r(obs, remaining) = {r_net:.4f}  (signal reel)")
+    print(f"  -> Le plancher mecanique gonfle la correlation de {r_brut - r_net:+.4f}")
+
+    # Mechanical floor estimate
+    if "n_mois_observation" in df.columns and "n_mois_nbi" in df.columns:
+        avg_ratio = (df["n_mois_observation"] / df["n_mois_nbi"]).mean()
+        print(f"\n  Ratio moyen n_obs/n_nbi = {avg_ratio:.2f}")
+        print(f"  Plancher mecanique estime (sqrt) = {np.sqrt(avg_ratio):.3f}")
+
+    # Scatter plot
+    fig, axes = plt.subplots(1, 2, figsize=(16, 7))
+
+    axes[0].scatter(df.loc[mask, "pnb_cumul_obs"], df.loc[mask, "pnb_total"],
+                    alpha=0.15, s=8, color="steelblue")
+    axes[0].set_xlabel("PNB obs (EUR)")
+    axes[0].set_ylabel("PNB total (EUR)")
+    axes[0].set_title(f"PNB obs vs PNB total (r={r_brut:.3f})")
+    axes[0].grid(alpha=0.3)
+
+    axes[1].scatter(df.loc[mask, "pnb_cumul_obs"], df.loc[mask, "pnb_remaining"],
+                    alpha=0.15, s=8, color="coral")
+    axes[1].set_xlabel("PNB obs (EUR)")
+    axes[1].set_ylabel("PNB remaining (EUR)")
+    axes[1].set_title(f"PNB obs vs PNB remaining (r={r_net:.3f})")
+    axes[1].grid(alpha=0.3)
+
+    plt.tight_layout()
+    plt.show()
+
+else:
+    print("Colonnes pnb_remaining ou pnb_cumul_obs manquantes.")
+    print("Executer data_preparation.ipynb pour generer pnb_remaining.")
+
+
+# %% ---- CELL 7: Ratio PNB precoce / PNB total ----
+
+print("\n" + "=" * 60)
+print("HA4 — RATIO PNB OBS / PNB TOTAL")
 print("=" * 60)
 
 for col, label in [("pnb_cumul_3m", "3 mois"), ("pnb_cumul_obs", "obs (T+1)")]:
@@ -176,13 +246,13 @@ for col, label in [("pnb_cumul_3m", "3 mois"), ("pnb_cumul_obs", "obs (T+1)")]:
         mask = (df["pnb_total"] > 0) & df[col].notna()
         ratio = df.loc[mask, col] / df.loc[mask, "pnb_total"]
 
-        print(f"\nRatio PNB {label} / PNB 12 mois (clients PNB > 0) :")
+        print(f"\nRatio PNB {label} / PNB total (clients PNB > 0) :")
         print(f"  Mean :   {ratio.mean():.2%}")
         print(f"  Median : {ratio.median():.2%}")
         print(f"  Std :    {ratio.std():.2%}")
 
         if label == "obs (T+1)":
-            print(f"  -> En moyenne, {ratio.mean():.0%} du PNB 12 mois est realise dans les 6 premiers mois")
+            print(f"  -> En moyenne, {ratio.mean():.0%} du PNB total est realise dans la fenetre d'observation")
 
 
 # %% ---- CELL 8: Stabilite par segment ----
@@ -212,14 +282,16 @@ print("HA4 — VERDICT")
 print("=" * 60)
 print("""
 A remplir :
-  Correlation PNB 3m vs 12m :  r = ____
-  Correlation PNB 6m vs 12m :  r = ____
-  R2 regression simple 6m :    ____
-  Ratio moyen PNB 6m / 12m :   ____%
+  Correlation PNB obs vs total :       r = ____
+  Correlation PNB obs vs remaining :   r = ____ (signal reel)
+  R2 regression obs -> total :         ____
+  R2 regression obs -> remaining :     ____
+  Ratio moyen PNB obs / PNB total :    ____%
 
   HA4 VALIDEE si :
-    - r(6m, 12m) > 0.60
-    - R2 > 0.30
+    - r(obs, total) > 0.60
+    - r(obs, remaining) > 0.30 (au-dela du plancher mecanique)
+    - R2(remaining) > 0.10
     - Correlation stable entre segments
 
   Conclusion : [VALIDEE / PARTIELLEMENT / NON VALIDEE]

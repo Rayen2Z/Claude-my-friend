@@ -6,11 +6,11 @@
 
 ## 1. Objectif du Modele
 
-Predire le **PNB (Produit Net Bancaire) a 12 mois** d'un nouveau client a partir de ses donnees disponibles dans les **3 a 6 premiers mois** suivant son entree en relation avec la banque.
+Predire le **PNB (Produit Net Bancaire)** d'un nouveau client sur la periode allant de son acquisition jusqu'a la fin du 4e trimestre suivant (T+3), a partir de ses donnees disponibles au snapshot T+1 (fin du trimestre suivant l'acquisition).
 
 Le modele se compose de deux sous-modeles :
-1. **Modele PNB** (regression) : predit le PNB total genere par le client sur ses 12 premiers mois
-2. **Modele Churn** (classification, phase ulterieure) : predit la probabilite que le client quitte la banque dans les 12 premiers mois
+1. **Modele PNB** (regression) : predit le PNB total genere par le client entre son mois d'acquisition et la fin de T+3 (10 a 12 mois selon la position dans le trimestre)
+2. **Modele Churn** (classification, phase ulterieure) : predit la probabilite que le client quitte la banque
 
 Ce document couvre le modele PNB. Le modele churn sera developpe dans un second temps.
 
@@ -57,47 +57,74 @@ client_id | date_creation | segment | profession | [autres colonnes]
 
 ## 3. Architecture du Modele
 
-### 3.1 Principe : un seul modele, entraine trimestriellement
+### 3.1 Principe : cadence trimestrielle T/T+1/T+3
 
-Apres discussion, l'approche retenue est un **modele unique** (pas de multi-phase) entraine chaque trimestre :
+L'approche retenue est un **modele unique** entraine a cadence trimestrielle, avec une architecture de fenetres explicite :
 
-- **Frequence d'entrainement** : trimestrielle (chaque debut de trimestre T)
-- **Donnees d'entrainement** : tous les clients historiques ayant au moins 12 mois d'anciennete (pour observer la cible PNB 12 mois)
-- **Fenetre de features** : les 3 a 6 premiers mois de chaque client (donnees comportementales precoces)
-- **Cible** : PNB total cumule sur les 12 premiers mois (`pnb_12m_total`)
-- **Prediction** : appliquee aux nouveaux clients ayant entre 3 et 6 mois d'anciennete
+- **T** = trimestre d'acquisition du client
+- **T+1** = fin du trimestre suivant = moment du snapshot (features, equipements, PNB cumule)
+- **T+3** = fin du 4e trimestre = fin de la fenetre cible (PNB total)
 
-### 3.2 Pourquoi 3 a 6 mois ?
+Parametres :
+- **Frequence d'entrainement** : trimestrielle
+- **Donnees d'entrainement** : toutes les cohortes dont la fenetre T+3 est entierement observable
+- **Fenetre d'observation** : du mois d'acquisition a la fin de T+1 = **4 a 6 mois** (`n_mois_observation`)
+- **Fenetre cible** : du mois d'acquisition a la fin de T+3 = **10 a 12 mois** (`n_mois_nbi`)
+- **Cible** : `pnb_total` brut (somme des PNB mensuels de la fenetre cible), avec `n_mois_nbi` comme feature
+- **Prediction** : appliquee aux clients acquis au trimestre T dont le snapshot T+1 vient d'etre disponible
+
+### 3.2 Pourquoi T+1 comme fenetre d'observation ?
 
 C'est le **meilleur compromis** entre :
-- Trop tot (0-2 mois) : pas assez de signal comportemental, predictions peu fiables
-- Trop tard (9-12 mois) : la prediction n'est plus utile car le client a deja presque accumule ses 12 mois
+- Trop tot (T seul, 1-3 mois) : pas assez de signal comportemental, predictions peu fiables
+- Trop tard (T+2 ou plus) : la prediction n'est plus utile operationnellement
 
-A 3-6 mois, on dispose de :
-- Premiers PNB mensuels (tendance, niveau, volatilite)
-- Produits souscrits/actives (equipements)
-- Indicateurs d'engagement (domiciliation salaire, carte activee, prelevements)
+A T+1, on dispose de :
+- **4 a 6 mois** de PNB mensuels (tendance, niveau, volatilite)
+- **Snapshot equipements** au moment de la prediction (produits souscrits, flux)
+- Indicateurs d'engagement (domiciliation salaire, prelevements)
+- **Minimum garanti de 3 mois complets** meme pour les clients acquis en fin de trimestre
 
-### 3.3 Schema temporel
+### 3.3 Variabilite des fenetres
+
+La position du client dans le trimestre d'acquisition determine la longueur des fenetres :
+
+| Mois dans T | n_mois_observation (T→fin T+1) | n_mois_nbi (T→fin T+3) |
+|-------------|-------------------------------|------------------------|
+| 1er mois (ex: janvier) | 6 | 12 |
+| 2e mois (ex: fevrier) | 5 | 11 |
+| 3e mois (ex: mars) | 4 | 10 |
+
+La feature `n_mois_nbi` permet au modele de relativiser la duree variable de la cible.
+La feature `n_mois_observation` capture la maturite des features comportementales.
+
+### 3.4 Schema temporel
 
 ```
-Client rejoint en Q2 2024 (ex: 15 avril 2024)
+Cohorte Q1 2024 :
 
-|-- Jour 0 --|------- Features (3-6 mois) -------|----------- Observation cible ------------|
-   15 avr                                  15 oct                                    15 avr 2025
-   2024                                    2024                                       2025
-                                                                                        
-   [    Mois 1-6 : donnees d'entree     ]  [     Mois 7-12 : on observe le reste     ]
-                                                                                        
-   PNB_m1 ... PNB_m6 = FEATURES              PNB_m7 ... PNB_m12 = partie de la CIBLE
-                                                                                        
-   CIBLE = PNB_m1 + PNB_m2 + ... + PNB_m12  (PNB total 12 mois)
+Client acquis en JANVIER 2024 :
+|-------- T (Q1) --------|-------- T+1 (Q2) --------|-------- T+2 (Q3) --------|-------- T+3 (Q4) --------|
+Jan                       Avr                         Jul                         Oct                    Dec
+ |=== 6 mois observation ===|                                                                             |
+ |================================= 12 mois NBI (pnb_total) =============================================|
+       n_mois_observation = 6                                                        n_mois_nbi = 12
+
+Client acquis en MARS 2024 :
+|-------- T (Q1) --------|-------- T+1 (Q2) --------|-------- T+2 (Q3) --------|-------- T+3 (Q4) --------|
+                     Mar  Avr                         Jul                         Oct                    Dec
+                      |= 4m =|                                                                             |
+                      |====================== 10 mois NBI (pnb_total) ====================================|
+       n_mois_observation = 4                                                        n_mois_nbi = 10
+
+Snapshot equipements : pris a fin T+1 (30 juin 2024) pour TOUTE la cohorte Q1 2024.
 ```
 
-**Point important** : les features (mois 1-6) sont un sous-ensemble de la cible (mois 1-12). Ce n'est **pas** du data leakage car :
-- On utilise les mois 1-6 comme **signal d'entree** (niveau, tendance, produits)
-- On predit le **total sur 12 mois** (qui inclut les mois 1-6 deja observes + les mois 7-12 inconnus)
-- Le modele apprend a extrapoler les mois 7-12 a partir du comportement des mois 1-6
+**Point important** : les PNB de la fenetre d'observation (`pnb_cumul_obs`) sont un sous-ensemble de la cible (`pnb_total`). Ce n'est **pas** du data leakage car :
+- On utilise le PNB d'observation comme **signal d'entree** (niveau, tendance, volatilite)
+- On predit le **PNB total** (qui inclut la partie observee + la partie future non observee)
+- Le modele apprend a extrapoler le PNB restant a partir du comportement observe
+- La variable `pnb_remaining = pnb_total - pnb_cumul_obs` est disponible pour tester une cible alternative (voir HA12)
 
 ---
 
@@ -105,56 +132,66 @@ Client rejoint en Q2 2024 (ex: 15 avril 2024)
 
 ### 4.1 Logique de construction
 
-Pour chaque client acquis :
+Pour chaque cohorte trimestrielle T :
 
-1. Identifier la **date de creation** (`date_creation`)
-2. Determiner le **trimestre d'acquisition** : Q dans lequel tombe la date_creation
-3. Extraire les **features** : PNB mensuel des mois 1 a 6, equipements, segment, profession
-4. Calculer la **cible** : PNB cumule des mois 1 a 12 (`pnb_12m_total`)
+1. Identifier tous les clients acquis pendant le trimestre T (`date_creation` dans T)
+2. Calculer les fenetres : `end_t1` (fin T+1), `end_t3` (fin T+3) en indices mois bancaires
+3. Calculer `n_mois_nbi` = nombre de mois du mois d'acquisition a fin T+3 (10, 11 ou 12)
+4. Calculer `n_mois_observation` = nombre de mois du mois d'acquisition a fin T+1 (4, 5 ou 6)
+5. Extraire les PNB mensuels `pnb_m1` a `pnb_m{n_mois_nbi}` depuis les fichiers PNB
+6. Charger le snapshot equipements T+1 (fichier `YYYY QX.csv`)
+7. Construire les features comportementales a partir de la fenetre d'observation
+8. Calculer la cible : `pnb_total = sum(pnb_m1 ... pnb_m{n_mois_nbi})`
 
-### 4.2 Fenetre variable selon la position dans le trimestre
+### 4.2 Variables derivees du preprocessing
 
-Un client qui rejoint le 1er janvier a 6 mois complets de donnees au 30 juin.
-Un client qui rejoint le 31 mars a 3 mois complets de donnees au 30 juin.
+| Variable | Formule | Description |
+|----------|---------|-------------|
+| `n_mois_nbi` | Mois acquisition -> fin T+3 | 10, 11 ou 12 |
+| `n_mois_observation` | Mois acquisition -> fin T+1 | 4, 5 ou 6 |
+| `pnb_cumul_obs` | sum(pnb_m1 ... pnb_m{n_mois_obs}) | PNB cumule sur la fenetre d'observation |
+| `pnb_cumul_3m` | sum(pnb_m1 ... pnb_m3) | PNB des 3 premiers mois |
+| `pnb_total` | sum(pnb_m1 ... pnb_m{n_mois_nbi}) | **CIBLE** du modele |
+| `pnb_remaining` | pnb_total - pnb_cumul_obs | PNB non encore observe (pour HA12) |
+| `pnb_mensuel_moyen` | pnb_total / n_mois_nbi | PNB mensuel moyen normalise (pour HA11) |
 
-Pour gerer cette variabilite :
-- **Feature fixe** : `mois_anciennete` = nombre de mois complets depuis la date_creation (entre 3 et 6)
-- Les PNB mensuels au-dela de l'anciennete sont remplis a 0 ou NaN (le modele apprend a gerer)
+### 4.3 Eligibilite d'un client
 
-### 4.3 Cohortes utilisables pour l'entrainement
+Un client est eligible pour l'entrainement si sa fenetre T+3 est entierement observable dans les donnees PNB disponibles. Le filtre est : `end_t3 <= max_pnb_idx` (indice mois bancaire le plus recent disponible).
 
-Avec des donnees de janvier 2023 a mars 2026, les cohortes suivantes ont une cible 12 mois observable :
+### 4.4 Cohortes utilisables pour l'entrainement
 
-| Trimestre d'acquisition | Date creation | PNB 12 mois observable jusqu'a | Utilisable ? |
-|------------------------|---------------|--------------------------------|-------------|
-| Q1 2023 (jan-mar) | Jan-Mar 2023 | Jan-Mar 2024 | OUI |
-| Q2 2023 (avr-jun) | Avr-Jun 2023 | Avr-Jun 2024 | OUI |
-| Q3 2023 (jul-sep) | Jul-Sep 2023 | Jul-Sep 2024 | OUI |
-| Q4 2023 (oct-dec) | Oct-Dec 2023 | Oct-Dec 2024 | OUI |
-| Q1 2024 (jan-mar) | Jan-Mar 2024 | Jan-Mar 2025 | OUI |
-| Q2 2024 (avr-jun) | Avr-Jun 2024 | Avr-Jun 2025 | OUI |
-| Q3 2024 (jul-sep) | Jul-Sep 2024 | Jul-Sep 2025 | OUI |
-| Q4 2024 (oct-dec) | Oct-Dec 2024 | Oct-Dec 2025 | OUI |
-| Q1 2025 (jan-mar) | Jan-Mar 2025 | Jan-Mar 2026 | OUI (juste) |
-| Q2 2025 (avr-jun) | Avr-Jun 2025 | Avr-Jun 2026 | NON (donnees jusqu'a mars 2026 seulement) |
-| Q3 2025 | - | - | NON |
-| Q4 2025 | - | - | NON |
+Avec des donnees de janvier 2023 a mars 2026, les cohortes suivantes ont une cible T+3 observable :
 
-**Total** : 9 cohortes trimestrielles utilisables (Q1 2023 a Q1 2025).
+| Cohorte (T) | Observation (T+1) | Cible (T+3) | Utilisable ? |
+|-------------|-------------------|-------------|-------------|
+| Q1 2023 | Q2 2023 | Q4 2023 | OUI |
+| Q2 2023 | Q3 2023 | Q1 2024 | OUI |
+| Q3 2023 | Q4 2023 | Q2 2024 | OUI |
+| Q4 2023 | Q1 2024 | Q3 2024 | OUI |
+| Q1 2024 | Q2 2024 | Q4 2024 | OUI |
+| Q2 2024 | Q3 2024 | Q1 2025 | OUI |
+| Q3 2024 | Q4 2024 | Q2 2025 | OUI |
+| Q4 2024 | Q1 2025 | Q3 2025 | OUI |
+| Q1 2025 | Q2 2025 | Q4 2025 | OUI |
+| Q2 2025 | Q3 2025 | Q1 2026 | OUI (juste) |
+| Q3 2025 | Q4 2025 | Q2 2026 | NON (donnees jusqu'a Q1 2026) |
 
-### 4.4 Decoupage Train / Test
+**Total** : ~10 cohortes trimestrielles utilisables (Q1 2023 a Q2 2025).
+
+### 4.5 Decoupage Train / Test
 
 **Approche temporelle** (recommandee) :
-- **Train** : cohortes Q1 2023 a Q3 2024 (7 cohortes)
-- **Test** : cohortes Q4 2024 a Q1 2025 (2 cohortes)
+- **Train** : cohortes Q1 2023 a Q4 2024 (8 cohortes)
+- **Test** : cohortes Q1 2025 a Q2 2025 (2 cohortes)
 
 Cela simule la realite : on entraine sur le passe et on predit l'avenir.
 
-### 4.5 Clients a predire (scoring)
+### 4.6 Clients a predire (scoring)
 
-Au trimestre T actuel (Q1 2026), on score les clients qui ont entre 3 et 6 mois d'anciennete :
-- Clients acquis entre **Q3 2025** (6 mois d'anciennete) et **Q4 2025** (3 mois d'anciennete)
-- Ces clients n'ont PAS leur PNB 12 mois — c'est exactement ce qu'on predit
+Au trimestre T actuel (Q1 2026), on score les clients acquis au trimestre Q4 2025 :
+- Leur snapshot T+1 (Q1 2026) vient d'etre disponible
+- Leur PNB total (fin T+3 = Q3 2026) est inconnu — c'est exactement ce qu'on predit
 
 ---
 
@@ -166,48 +203,40 @@ Au trimestre T actuel (Q1 2026), on score les clients qui ont entre 3 et 6 mois 
 |---------|------|-------------|
 | `segment` | categorielle | Mass Affluent / Mass Retail / Mass Retail with Potential |
 | `profession` | categorielle | Jeune Actif / Salarie / Cadre / etc. |
-| `mois_anciennete` | numerique | Nombre de mois complets depuis date_creation (3-6) |
+| `n_mois_observation` | numerique | Nombre de mois d'observation (4, 5 ou 6) |
+| `n_mois_nbi` | numerique | Nombre de mois dans la fenetre cible (10, 11 ou 12) |
 | `trimestre_acquisition` | categorielle | Q1/Q2/Q3/Q4 (saisonnalite) |
+| `annee_acquisition` | numerique | Annee d'acquisition |
 | Colonnes additionnelles si disponibles : age, nationalite, canal, est_frontalier, etc. |
 
-### 5.2 Features comportementales (premiers 3-6 mois)
+### 5.2 Features comportementales (fenetre d'observation T→T+1)
 
 | Feature | Type | Description |
 |---------|------|-------------|
-| `pnb_m1`, `pnb_m2`, ..., `pnb_m6` | numerique | PNB mensuel (0 si pas encore atteint) |
+| `pnb_m1`, `pnb_m2`, ..., `pnb_m6` | numerique | PNB mensuel (NaN si au-dela de n_mois_observation) |
 | `pnb_cumul_3m` | numerique | PNB cumule des 3 premiers mois |
-| `pnb_cumul_6m` | numerique | PNB cumule des 6 premiers mois (0 si < 6 mois) |
-| `pnb_moyen_mensuel` | numerique | PNB moyen par mois actif |
-| `pnb_tendance` | numerique | Pente de la regression lineaire du PNB mensuel |
-| `pnb_volatilite` | numerique | Ecart-type du PNB mensuel |
-| `pnb_mois_max` | numerique | PNB du meilleur mois |
-| `pnb_mois_positifs` | numerique | Nombre de mois avec PNB > 0 |
-| `log_pnb_cumul` | numerique | log1p(pnb_cumul) — pour stabiliser la distribution |
-| `ratio_pnb_m3_vs_m1` | numerique | Evolution du PNB entre mois 1 et mois 3 |
+| `pnb_cumul_obs` | numerique | PNB cumule sur la fenetre d'observation (4-6 mois) |
+| `obs_slope` | numerique | Pente de la regression lineaire du PNB sur la fenetre d'observation |
+| `obs_volatility` | numerique | Ecart-type du PNB mensuel sur la fenetre d'observation |
+| `obs_active_months` | numerique | Nombre de mois avec PNB > 0 dans la fenetre d'observation |
 
-### 5.3 Features equipements (produits souscrits)
+### 5.3 Features equipements (snapshot T+1)
+
+Les equipements proviennent du snapshot trimestriel T+1. Chaque produit est represente par sa **quantite** (`qty_*`), pas un indicateur binaire.
 
 | Feature | Type | Description |
 |---------|------|-------------|
-| `n_produits_total` | numerique | Nombre total de produits souscrits |
-| `has_compte_courant` | binaire | Compte courant |
-| `has_carte_bancaire` | binaire | Carte bancaire |
-| `has_epargne` | binaire | Produit d'epargne (livret, assurance-vie) |
-| `has_credit` | binaire | Credit immobilier ou consommation |
-| `has_assurance` | binaire | Assurance (MRH, auto, prevoyance) |
-| `n_familles_produits` | numerique | Nombre de familles de produits couvertes (0-4) |
-| `has_package_complet` | binaire | 1 si >= 3 familles couvertes |
-| `a_domiciliation_salaire` | binaire | Salaire domicilie |
-| `a_prelevement` | binaire | Au moins un prelevement automatique |
-| `vitesse_equipement` | numerique | Nombre de produits souscrits dans le 1er mois |
+| `n_produits_total` | numerique | Nombre de produits distincts detenus (qty > 0) |
+| `qty_*` | numerique | Quantite detenue pour chaque produit individuel |
+| Colonnes de flux (si disponibles) | numerique | Encours, flux entrants/sortants au snapshot T+1 |
 
-### 5.4 Features d'interaction
+### 5.4 Features d'interaction (a construire lors de l'entrainement)
 
 | Feature | Formule | Justification |
 |---------|---------|---------------|
 | `segment_x_produits` | segment encode * n_produits | Affluent avec beaucoup de produits = fort potentiel |
-| `pnb_par_produit` | pnb_cumul / n_produits | Efficacite de chaque produit |
-| `tendance_x_equipement` | pnb_tendance * n_produits | Croissance combinee a l'equipement |
+| `pnb_par_produit` | pnb_cumul_obs / n_produits | Efficacite de chaque produit |
+| `tendance_x_equipement` | obs_slope * n_produits | Croissance combinee a l'equipement |
 
 ---
 
@@ -216,27 +245,41 @@ Au trimestre T actuel (Q1 2026), on score les clients qui ont entre 3 et 6 mois 
 ### 6.1 Definition
 
 ```
-pnb_12m_total = SUM(pnb_mensuel) pour les mois 1 a 12 apres date_creation
+pnb_total = SUM(pnb_mensuel) pour les mois 1 a n_mois_nbi apres le mois d'acquisition
 ```
 
-C'est le PNB **total cumule** sur les 12 premiers mois du client. Il inclut les mois 1-6 (deja observes et utilises comme features) et les mois 7-12 (non observes, a predire implicitement).
+C'est le PNB **total cumule** du client entre son mois d'acquisition et la fin du trimestre T+3. Il varie de 10 a 12 mois selon la position du client dans le trimestre d'acquisition.
 
-### 6.2 Pourquoi 12 mois et pas 6 ?
+La feature `n_mois_nbi` (10, 11 ou 12) est fournie au modele pour qu'il apprenne a relativiser la duree d'exposition variable.
 
-- 12 mois est le cycle naturel d'une relation bancaire
-- Les cotisations annuelles (carte, assurance) se manifestent sur 12 mois
-- Un credit immobilier met souvent 3-6 mois a generer du PNB — 6 mois est trop court
-- La CLV existante est sur un horizon de 3 ans — 12 mois est le premier palier naturel
-- Apres 12 mois, le client bascule vers le modele CLV etabli
+### 6.2 Pourquoi T+3 (et non T+2 ou un horizon fixe) ?
 
-### 6.3 Alternative : predire uniquement les mois 7-12
+- T+3 donne un horizon de **10-12 mois**, proche du cycle naturel d'une relation bancaire
+- Les cotisations annuelles (carte, assurance) se manifestent sur ~12 mois
+- Un credit immobilier met souvent 3-6 mois a generer du PNB — un horizon plus court serait insuffisant
+- L'alignement trimestriel permet une operationnalisation directe (scoring tous les trimestres)
+- Apres T+3, le client a suffisamment d'historique pour basculer vers le modele CLV etabli
 
-Au lieu de predire le total 12 mois, on pourrait predire uniquement le PNB des mois 7-12 (la partie non observee), puis l'additionner au PNB deja observe des mois 1-6.
+### 6.3 Variable PNB mensuel moyen (pour analyses)
 
-**Avantage** : isole mieux la capacite predictive du modele
-**Inconvenient** : introduce une discontinuite entre les clients a 3 mois (qui ont moins de PNB observe) et ceux a 6 mois
+```
+pnb_mensuel_moyen = pnb_total / n_mois_nbi
+```
 
-**Recommandation** : tester les deux approches et comparer les MAE. Si la prediction du total 12 mois est meilleure (grace a la correlation entre mois 1-6 et mois 7-12), la garder.
+Cette variable n'est **pas** la cible du modele, mais elle est utilisee dans les hypotheses (HA2, HA7, HA8, HA11) pour neutraliser l'effet de la duree variable lors des comparaisons entre groupes.
+
+### 6.4 Alternative : predire le PNB restant (`pnb_remaining`)
+
+```
+pnb_remaining = pnb_total - pnb_cumul_obs
+```
+
+Au lieu de predire `pnb_total` (qui inclut le PNB deja observe), on pourrait predire uniquement la partie non observee (`pnb_remaining`), puis l'additionner au PNB deja observe.
+
+**Avantage** : isole le vrai pouvoir predictif du modele, evite que la correlation mecanique entre `pnb_cumul_obs` et `pnb_total` gonfle artificiellement les metriques
+**Inconvenient** : le modele doit predire une quantite plus incertaine (moins de variance expliquee mecaniquement)
+
+**Decision** : les deux approches seront testees dans HA12. La cible par defaut reste `pnb_total` brut.
 
 ---
 
@@ -258,20 +301,20 @@ GradientBoostingRegressor(
 
 ### 7.2 Cycle d'entrainement trimestriel
 
-A chaque debut de trimestre T :
+A chaque debut de trimestre T_current :
 
-1. **Collecter** toutes les cohortes historiques avec 12 mois de recul
-2. **Construire** les features (mois 1-6) et la cible (mois 1-12)
+1. **Collecter** toutes les cohortes dont la fenetre T+3 est entierement observable
+2. **Construire** les features (fenetre d'observation T→T+1) et la cible (fenetre T→T+3)
 3. **Entrainer** le modele sur les cohortes les plus anciennes
-4. **Valider** sur la cohorte la plus recente
-5. **Scorer** les nouveaux clients ayant 3-6 mois d'anciennete
+4. **Valider** sur les cohortes les plus recentes
+5. **Scorer** les clients de la cohorte dont le snapshot T+1 vient d'etre disponible
 
 ### 7.3 Exemple concret : entrainement au Q1 2026
 
 ```
-TRAIN : clients acquis Q1 2023 -> Q3 2024  (7 cohortes, ~12+ mois de recul)
-TEST  : clients acquis Q4 2024 -> Q1 2025  (2 cohortes, 12 mois de recul)
-SCORE : clients acquis Q3 2025 -> Q4 2025  (3-6 mois d'anciennete, PNB 12m inconnu)
+TRAIN : cohortes Q1 2023 -> Q4 2024  (8 cohortes, fenetre T+3 complete)
+TEST  : cohortes Q1 2025 -> Q2 2025  (2 cohortes, fenetre T+3 complete)
+SCORE : cohorte Q4 2025              (snapshot T+1 = Q1 2026 disponible, PNB total inconnu)
 ```
 
 ---
@@ -331,7 +374,7 @@ Ou :
 
 ### 10.1 Biais de la fenetre variable
 
-Les clients a 6 mois ont plus d'information que ceux a 3 mois. Le modele doit apprendre que `mois_anciennete` est une feature clef qui module l'importance des PNB mensuels.
+Les clients avec `n_mois_observation = 6` ont plus d'information que ceux avec `n_mois_observation = 4`. De meme, les clients avec `n_mois_nbi = 12` ont une cible sur un horizon plus long que ceux avec `n_mois_nbi = 10`. Le modele doit apprendre a utiliser ces features pour moduler ses predictions. Les hypotheses HA11 et HA13 valident la robustesse du modele face a cette variabilite.
 
 ### 10.2 Saisonnalite
 
@@ -373,7 +416,7 @@ Au Luxembourg, les frontaliers representent une part significative des nouvelles
 | **CLV** | Customer Lifetime Value — valeur totale actualisee d'un client sur un horizon donne |
 | **Cohorte** | Groupe de clients acquis dans la meme periode (trimestre) |
 | **Feature** | Variable d'entree du modele (predicteur) |
-| **Cible / Target** | Variable a predire (PNB 12 mois) |
+| **Cible / Target** | Variable a predire (`pnb_total`, PNB sur la fenetre T→T+3) |
 | **Segment** | Classification client : Mass Affluent, Mass Retail, Mass Retail with Potential |
 | **Equipement** | Produit ou service souscrit par le client |
 | **Domiciliation** | Fait de faire verser son salaire sur le compte de la banque |
@@ -381,3 +424,9 @@ Au Luxembourg, les frontaliers representent une part significative des nouvelles
 | **STATEC** | Institut national de la statistique du Luxembourg |
 | **Walk-forward** | Methode de validation temporelle (pas de futur dans le train) |
 | **Huber loss** | Fonction de perte robuste aux valeurs aberrantes |
+| **T/T+1/T+3** | Architecture de fenetrage trimestriel : T = acquisition, T+1 = observation, T+3 = cible |
+| **n_mois_nbi** | Nombre de mois dans la fenetre cible (10, 11 ou 12 selon la position dans le trimestre) |
+| **n_mois_observation** | Nombre de mois dans la fenetre d'observation (4, 5 ou 6) |
+| **pnb_remaining** | PNB non observe = pnb_total - pnb_cumul_obs (cible alternative pour HA12) |
+| **pnb_mensuel_moyen** | PNB total / n_mois_nbi (PNB normalise par duree, pour analyses) |
+| **Plancher mecanique** | Correlation artificielle entre pnb_cumul_obs et pnb_total due a leur overlap |

@@ -2,11 +2,12 @@
 # HA5 — Les Equipements (Produits) sont le Signal le Plus Fort
 # =============================================================================
 #
-# Hypothese : le nombre et le type de produits souscrits dans les 6 premiers
-# mois sont le meilleur predicteur du PNB a 12 mois.
+# Hypothese : le nombre et le type de produits au snapshot T+1 sont le
+# meilleur predicteur du PNB total (T→T+3).
 #
-# Cette analyse est cruciale car elle determine si les produits doivent
-# etre les features principales du modele.
+# NOTE T/T+1/T+3 : n_produits_total est confonde avec la duree en banque
+# au moment du snapshot (4-6 mois selon n_mois_observation). Ajouter
+# n_mois_observation comme controle dans les regressions.
 #
 # Prerequis : executer data_preparation.ipynb -> df_acquisitions.pkl
 # =============================================================================
