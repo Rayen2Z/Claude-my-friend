@@ -57,18 +57,18 @@ if len(pnb_monthly) >= 3:
         lr = LinearRegression().fit(x, y)
         return lr.coef_[0]
 
-    df["pnb_pente"] = df.apply(compute_slope, axis=1)
+    df["obs_slope"] = df.apply(compute_slope, axis=1)
 
     # Volatility (std of monthly PNB)
-    df["pnb_volatilite_mensuelle"] = df[months_to_use].std(axis=1)
+    df["obs_volatility"] = df[months_to_use].std(axis=1)
 
     # Number of active months (PNB > 0)
-    df["mois_pnb_positif"] = (df[months_to_use] > 0).sum(axis=1)
+    df["obs_active_months"] = (df[months_to_use] > 0).sum(axis=1)
 
     # Classify trajectory profiles
     def classify_trajectory(row):
-        slope = row["pnb_pente"]
-        n_active = row["mois_pnb_positif"]
+        slope = row["obs_slope"]
+        n_active = row["obs_active_months"]
         if n_active <= 1:
             return "dormant"
         elif slope > 50:
@@ -85,7 +85,7 @@ if len(pnb_monthly) >= 3:
         n_clients=("client_id", "count"),
         pnb_moyen_12m=("pnb_total", "mean"),
         pnb_median_12m=("pnb_total", "median"),
-        pnb_pente_moy=("pnb_pente", "mean"),
+        obs_slope_moy=("obs_slope", "mean"),
     ).round(0)
 
     print("\nPNB 12 mois par profil de trajectoire :\n")
@@ -153,7 +153,7 @@ if len(pnb_monthly) >= 3:
 
     df["is_early_peak"] = (
         (df[pnb_monthly[0]] > df[pnb_monthly[0]].quantile(0.75)) &
-        (df["pnb_pente"] < -20)
+        (df["obs_slope"] < -20)
     ).astype(int)
 
     n_slow = df["is_slow_starter"].sum()
@@ -182,8 +182,8 @@ print("=" * 60)
 
 from sklearn.metrics import r2_score
 
-if "pnb_cumul_obs" in df.columns and "pnb_pente" in df.columns:
-    mask = df[["pnb_cumul_obs", "pnb_pente", "pnb_total"]].notna().all(axis=1)
+if "pnb_cumul_obs" in df.columns and "obs_slope" in df.columns:
+    mask = df[["pnb_cumul_obs", "obs_slope", "pnb_total"]].notna().all(axis=1)
 
     # Model 1: cumul seul
     X1 = df.loc[mask, ["pnb_cumul_obs"]].values
@@ -192,7 +192,7 @@ if "pnb_cumul_obs" in df.columns and "pnb_pente" in df.columns:
     r2_cumul = r2_score(y, lr1.predict(X1))
 
     # Model 2: cumul + tendance + volatilite
-    feat = ["pnb_cumul_obs", "pnb_pente", "pnb_volatilite_mensuelle", "mois_pnb_positif"]
+    feat = ["pnb_cumul_obs", "obs_slope", "obs_volatility", "obs_active_months"]
     feat = [f for f in feat if f in df.columns]
     X2 = df.loc[mask, feat].values
     lr2 = LinearRegression().fit(X2, y)
