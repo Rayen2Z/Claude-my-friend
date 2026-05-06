@@ -619,6 +619,6 @@ card(sl, Inches(0.5), Inches(4.7), Inches(12.1), Inches(2.3),
 snum(sl, 14)
 
 # ── save ─────────────────────────────────────────────────────────────────────
-out = "Acquisition_model/CLV_Acquisition_Model_Presentation.pptx"
+out = "Acquisition_model/presentation/CLV_Acquisition_Model_Presentation.pptx"
 prs.save(out)
 print(f"Saved: {out} ({len(prs.slides)} slides)")

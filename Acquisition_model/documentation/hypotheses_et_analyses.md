@@ -664,6 +664,8 @@ Ces analyses sont descriptives et informent la comprehension du probleme sans bl
 
 ## Scripts a creer ou mettre a jour
 
+Tous les scripts sont dans `Acquisition_model/hypotheses/`. Ils chargent `../df_acquisitions.pkl` (genere par `notebooks/data_preparation.ipynb`).
+
 | Script | Hypotheses couvertes | Statut |
 |--------|---------------------|--------|
 | `ha1_qualite_donnees.py` | HA1 + controles produit | A mettre a jour |

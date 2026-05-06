@@ -280,19 +280,30 @@ Nouveau fichier : `train_baseline.py` — XGBoost unique sur pnb_total avec cali
 
 ```
 Acquisition_model/
-+-- architecture_modele_combine.md   # CE DOCUMENT
-+-- data_preparation.ipynb           # MAJ : ajout chargement PNB par produit
-+-- eda_acquisitions.ipynb           # MAJ : ajout sections EDA par produit
-+-- train_baseline.py                # NOUVEAU : baseline modele unique + calibration
-+-- train_multi_model.py             # NOUVEAU : 4 sous-modeles XGBoost
-+-- calibration.py                   # NOUVEAU : lissage par deciles
-+-- clv_assembly.py                  # NOUVEAU : agregation predictions -> CLV
-+-- evaluation.py                    # NOUVEAU : framework d'evaluation croisee
-+-- documentation_modele_acquisitions.md  # MAJ : nouvelle architecture
-+-- hypotheses_et_analyses.md        # MAJ : ajout hypotheses decomposition
-+-- ha1..ha13_*.py                   # CONSERVE : scripts d'hypotheses existants
-+-- CLV_Acquisition_Model_Presentation.pptx
-+-- df_acquisitions.pkl              # SORTIE : inclut colonnes par produit
++-- df_acquisitions.pkl                  # SORTIE : inclut colonnes par produit
++-- documentation/
+|   +-- architecture_modele_combine.md   # CE DOCUMENT
+|   +-- documentation_modele_acquisitions.md  # MAJ : nouvelle architecture
+|   +-- hypotheses_et_analyses.md        # MAJ : ajout hypotheses decomposition
++-- hypotheses/
+|   +-- ha1..ha13_*.py                   # CONSERVE : scripts d'hypotheses existants
+|   +-- hp1_decomposition_produits.py    # NOUVEAU : hypotheses multi-produit
+|   +-- hp4_hp5_stabilite_equipement.py  # NOUVEAU
+|   +-- hp6_facteurs_croissance.py       # NOUVEAU
+|   +-- hp8_hp9_calibration.py           # NOUVEAU
+|   +-- hp10_survie_mix_produit.py       # NOUVEAU
+|   +-- hp11_hp13_4modeles_vs_1.py       # NOUVEAU
+|   +-- ae9_ae10_canal_marges.py         # NOUVEAU
++-- notebooks/
+|   +-- data_preparation.ipynb           # MAJ : ajout chargement PNB par produit
+|   +-- eda_acquisitions.ipynb           # MAJ : ajout sections EDA par produit
++-- presentation/
+|   +-- CLV_Acquisition_Model_Presentation.pptx
++-- train_baseline.py                    # NOUVEAU : baseline modele unique + calibration
++-- train_multi_model.py                 # NOUVEAU : 4 sous-modeles XGBoost
++-- calibration.py                       # NOUVEAU : lissage par deciles
++-- clv_assembly.py                      # NOUVEAU : agregation predictions -> CLV
++-- evaluation.py                        # NOUVEAU : framework d'evaluation croisee
 ```
 
 ---

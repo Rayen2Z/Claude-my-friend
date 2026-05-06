@@ -19,7 +19,7 @@
 # %% ---- CELL 0: Charger le DataFrame ----
 
 import pickle
-df = pickle.load(open("df_acquisitions.pkl", "rb"))
+df = pickle.load(open("../df_acquisitions.pkl", "rb"))
 print(f"DataFrame charge : {df.shape[0]:,} lignes, {df.shape[1]} colonnes")
 
 
