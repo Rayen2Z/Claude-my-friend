@@ -1,86 +1,67 @@
-import numpy as np
-import pandas as pd
+windows = [2, 3, 4, 5, 6, 12, 24]  # months
 
-# Deduplicate across snapshot files (same subscription event repeated yearly)
-df_unique = df.drop_duplicates(
-    subset=["Identifiant Tiers", "Produits", "Date d'ouverture"]
-).copy()
+def products_in_window(months):
+    threshold_days = months * 30.44
+    # Clients observable for this window
+    eligible = client_meta[client_meta["tenure_days"] >= threshold_days].index
+    
+    subs = df_unique[
+        (df_unique["Identifiant Tiers"].isin(eligible)) &
+        (df_unique["days_to_sub"] <= threshold_days)
+    ]
+    
+    product_counts = (
+        subs.groupby("Produits")
+            .size()
+            .rename("n_subscriptions")
+            .to_frame()
+    )
+    product_counts["n_clients_eligible"] = len(eligible)
+    product_counts["penetration_pct"] = (
+        product_counts["n_subscriptions"] / len(eligible) * 100
+    ).round(1)
+    product_counts["share_of_window_pct"] = (
+        product_counts["n_subscriptions"] / product_counts["n_subscriptions"].sum() * 100
+    ).round(1)
+    product_counts["window_months"] = months
+    
+    return product_counts.reset_index()
 
-df_unique["days_to_sub"] = (df_unique["Date d'ouverture"] - df_unique["Date Création"]).dt.days
-df_unique = df_unique[df_unique["days_to_sub"] >= 0]
+window_mix = pd.concat([products_in_window(m) for m in windows], ignore_index=True)
 
-# Reference date = latest event observed in your data
-snapshot_date = df_unique["Date d'ouverture"].max()
 
-# Per-client metadata: join date, total products held, tenure
-client_meta = (
-    df_unique.groupby("Identifiant Tiers")
-    .agg(join_date=("Date Création", "first"),
-         total_products=("Produits", "count"))
-)
-client_meta["tenure_days"] = (snapshot_date - client_meta["join_date"]).dt.days
 
-# Build the equipment curve
-months_windows = [2, 3, 4, 5, 6]
 
-# Fixed cohort: only clients with enough tenure to be observed across ALL windows
-min_tenure = max(months_windows) * 30.44
-cohort = client_meta[client_meta["tenure_days"] >= min_tenure].index
-print(f"Cohort size: {len(cohort):,} clients with ≥{max(months_windows)} months tenure")
+xxxxxxx
 
-results = []
-for m in months_windows:
-    threshold = m * 30.44
 
-    cum_at_m = (
-        df_unique[
-            (df_unique["Identifiant Tiers"].isin(cohort)) &
-            (df_unique["days_to_sub"] <= threshold)
-        ]
-        .groupby("Identifiant Tiers").size()
-        .reindex(cohort, fill_value=0)
+
+1. Top products within each window (what dominates early vs. late):
+for m in windows:
+    print(f"\n=== First {m} months — top 10 products ===")
+    print(
+        window_mix[window_mix["window_months"] == m]
+        .nlargest(10, "share_of_window_pct")
+        [["Produits", "n_subscriptions", "penetration_pct", "share_of_window_pct"]]
+        .to_string(index=False)
     )
 
-    total = client_meta.loc[cohort, "total_products"]
-    pct = (cum_at_m / total * 100)
-
-    results.append({
-        "month": m,
-        "avg_products_held": cum_at_m.mean().round(2),
-        "median_products_held": cum_at_m.median(),
-        "pct_of_final_equipment": pct.mean().round(1),
-        "avg_total_at_snapshot": total.mean().round(2),
-    })
-
-equipment_curve = pd.DataFrame(results)
-print(equipment_curve)
 
 
 
-
-equipment_curve["marginal_gain"] = equipment_curve["avg_products_held"].diff()
-equipment_curve["marginal_per_month"] = (
-    equipment_curve["marginal_gain"] / equipment_curve["month"].diff()
+2. Marginal acquisitions between windows — this is the better view for "which products need more time":
+pivot = window_mix.pivot_table(
+    index="Produits", columns="window_months",
+    values="penetration_pct", fill_value=0
 )
+# Marginal penetration gained in each interval
+pivot_marginal = pivot.diff(axis=1).fillna(pivot.iloc[:, [0]])
+print(pivot_marginal.round(1))
 
 
 
+fast = pivot_marginal.loc[pivot_marginal[2] / pivot_marginal.sum(axis=1) > 0.5]
+slow = pivot_marginal.loc[pivot_marginal[24] / pivot_marginal.sum(axis=1) > 0.3]
 
-
-import matplotlib.pyplot as plt
-
-fig, ax1 = plt.subplots(figsize=(10, 5))
-ax1.plot(equipment_curve["month"], equipment_curve["avg_products_held"],
-         marker="o", linewidth=2, label="Avg products held")
-ax1.axhline(equipment_curve["avg_total_at_snapshot"].iloc[0],
-            ls="--", color="gray", label="Avg at snapshot")
-ax1.set_xlabel("Months since joining")
-ax1.set_ylabel("Avg products held")
-ax1.legend()
-
-ax2 = ax1.twinx()
-ax2.plot(equipment_curve["month"], equipment_curve["pct_of_final_equipment"],
-         marker="s", color="tab:orange", label="% of final equipment")
-ax2.set_ylabel("% of final equipment")
-plt.title("Client equipment ramp")
-plt.show()
+print(f"Fast products (>50% acquired in first 2 months): {fast.index.tolist()}")
+print(f"Slow products (>30% acquired after month 12):   {slow.index.tolist()}")
