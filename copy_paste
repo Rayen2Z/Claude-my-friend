@@ -1,70 +1,27 @@
-A family with high penetration + low share = nearly everyone gets one, but only one (e.g. main checking account — 95% of clients have one, but it's one event each).
-A family with moderate penetration + high share = fewer clients touch it, but those who do, buy a lot (e.g. cards — half of clients, but multiple cards each).
-A family with low penetration + low share = rare and shallow product, real cross-sell opportunity (e.g. wealth management early in lifecycle).
-A family with high penetration + high share = the workhorse of that lifecycle stage.
+import numpy as np
 
+windows_to_plot = [2, 6, 12, 24]
+fig, axes = plt.subplots(1, len(windows_to_plot), figsize=(20, 5), sharex=True, sharey=True)
 
+# Consistent colors across panels
+families = window_mix_family["Famille Produit"].unique()
+colors = dict(zip(families, plt.cm.tab10(np.linspace(0, 1, len(families)))))
 
-import matplotlib.pyplot as plt
+for ax, m in zip(axes, windows_to_plot):
+    sub = window_mix_family[window_mix_family["window_months"] == m]
+    ax.scatter(sub["penetration_pct"], sub["share_of_window_pct"],
+               s=sub["n_subscriptions"] / sub["n_subscriptions"].max() * 800,
+               c=[colors[f] for f in sub["Famille Produit"]],
+               alpha=0.6, edgecolors="black")
+    for _, row in sub.iterrows():
+        ax.annotate(row["Famille Produit"],
+                    (row["penetration_pct"], row["share_of_window_pct"]),
+                    fontsize=8, ha="center")
+    ax.set_title(f"Month {m}")
+    ax.set_xlabel("Penetration (%)")
+    ax.grid(alpha=0.3)
 
-# Pivot so each family is a column, months are the index
-pen_pivot = window_mix_family.pivot(
-    index="window_months", columns="Famille Produit", values="penetration_pct"
-)
-share_pivot = window_mix_family.pivot(
-    index="window_months", columns="Famille Produit", values="share_of_window_pct"
-)
-
-# Sort families by their final value so the legend reads top-to-bottom
-pen_order = pen_pivot.iloc[-1].sort_values(ascending=False).index
-share_order = share_pivot.iloc[-1].sort_values(ascending=False).index
-
-fig, axes = plt.subplots(1, 2, figsize=(16, 6))
-
-# Penetration curve
-pen_pivot[pen_order].plot(ax=axes[0], marker="o", linewidth=2)
-axes[0].set_title("Penetration by family across lifecycle windows")
-axes[0].set_xlabel("Months since joining")
-axes[0].set_ylabel("Penetration (% of eligible clients)")
-axes[0].set_xticks(pen_pivot.index)
-axes[0].grid(alpha=0.3)
-axes[0].legend(title="Famille Produit", bbox_to_anchor=(1.02, 1), loc="upper left")
-
-# Share of window curve
-share_pivot[share_order].plot(ax=axes[1], marker="o", linewidth=2)
-axes[1].set_title("Share of window by family across lifecycle")
-axes[1].set_xlabel("Months since joining")
-axes[1].set_ylabel("Share of subscriptions in window (%)")
-axes[1].set_xticks(share_pivot.index)
-axes[1].grid(alpha=0.3)
-axes[1].legend(title="Famille Produit", bbox_to_anchor=(1.02, 1), loc="upper left")
-
+axes[0].set_ylabel("Share of window (%)")
+plt.suptitle("Family positioning: reach × activity share across lifecycle", y=1.02)
 plt.tight_layout()
 plt.show()
-
-
-
-
-
-
-
-
-
-
-top_n = 8
-top_families = pen_pivot.iloc[-1].nlargest(top_n).index
-pen_pivot_top = pen_pivot[top_families].copy()
-pen_pivot_top["Autres"] = pen_pivot.drop(columns=top_families).sum(axis=1)
-
-
-
-fig, ax = plt.subplots(figsize=(10, 6))
-share_pivot[share_order].plot.area(ax=ax, alpha=0.8)
-ax.set_title("Subscription mix evolution across lifecycle")
-ax.set_xlabel("Months since joining")
-ax.set_ylabel("Share of window (%)")
-ax.set_ylim(0, 100)
-ax.legend(title="Famille Produit", bbox_to_anchor=(1.02, 1), loc="upper left")
-plt.tight_layout()
-plt.show()
-
