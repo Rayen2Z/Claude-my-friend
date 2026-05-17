@@ -1,8 +1,5 @@
-windows = [2, 3, 4, 5, 6, 12, 24]  # months
-
-def products_in_window(months):
+def products_in_window(months, group_col="Produits"):
     threshold_days = months * 30.44
-    # Clients observable for this window
     eligible = client_meta[client_meta["tenure_days"] >= threshold_days].index
     
     subs = df_unique[
@@ -10,58 +7,34 @@ def products_in_window(months):
         (df_unique["days_to_sub"] <= threshold_days)
     ]
     
-    product_counts = (
-        subs.groupby("Produits")
-            .size()
-            .rename("n_subscriptions")
-            .to_frame()
+    grouped = subs.groupby(group_col).agg(
+        n_subscriptions=("Identifiant Tiers", "size"),
+        n_clients=("Identifiant Tiers", "nunique"),
     )
-    product_counts["n_clients_eligible"] = len(eligible)
-    product_counts["penetration_pct"] = (
-        product_counts["n_subscriptions"] / len(eligible) * 100
+    grouped["n_clients_eligible"] = len(eligible)
+    grouped["penetration_pct"] = (grouped["n_clients"] / len(eligible) * 100).round(1)
+    grouped["share_of_window_pct"] = (
+        grouped["n_subscriptions"] / grouped["n_subscriptions"].sum() * 100
     ).round(1)
-    product_counts["share_of_window_pct"] = (
-        product_counts["n_subscriptions"] / product_counts["n_subscriptions"].sum() * 100
-    ).round(1)
-    product_counts["window_months"] = months
+    grouped["window_months"] = months
     
-    return product_counts.reset_index()
+    return grouped.reset_index()
 
-window_mix = pd.concat([products_in_window(m) for m in windows], ignore_index=True)
-
-
-
-
-xxxxxxx
-
-
-
-1. Top products within each window (what dominates early vs. late):
-for m in windows:
-    print(f"\n=== First {m} months — top 10 products ===")
-    print(
-        window_mix[window_mix["window_months"] == m]
-        .nlargest(10, "share_of_window_pct")
-        [["Produits", "n_subscriptions", "penetration_pct", "share_of_window_pct"]]
-        .to_string(index=False)
-    )
-
-
-
-
-2. Marginal acquisitions between windows — this is the better view for "which products need more time":
-pivot = window_mix.pivot_table(
-    index="Produits", columns="window_months",
-    values="penetration_pct", fill_value=0
+# Now call it with whichever level you want
+window_mix_family = pd.concat(
+    [products_in_window(m, "Famille Produit") for m in windows],
+    ignore_index=True
 )
-# Marginal penetration gained in each interval
-pivot_marginal = pivot.diff(axis=1).fillna(pivot.iloc[:, [0]])
-print(pivot_marginal.round(1))
 
 
 
-fast = pivot_marginal.loc[pivot_marginal[2] / pivot_marginal.sum(axis=1) > 0.5]
-slow = pivot_marginal.loc[pivot_marginal[24] / pivot_marginal.sum(axis=1) > 0.3]
 
-print(f"Fast products (>50% acquired in first 2 months): {fast.index.tolist()}")
-print(f"Slow products (>30% acquired after month 12):   {slow.index.tolist()}")
+grouped["avg_products_per_holder"] = (
+    grouped["n_subscriptions"] / grouped["n_clients"]
+).round(2)
+
+
+
+
+
+
