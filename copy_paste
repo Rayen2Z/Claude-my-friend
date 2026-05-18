@@ -1,27 +1,135 @@
-import numpy as np
+windows = [2, 3, 4, 5, 6, 12, 24]
 
-windows_to_plot = [2, 6, 12, 24]
-fig, axes = plt.subplots(1, len(windows_to_plot), figsize=(20, 5), sharex=True, sharey=True)
+# Per-client total products at snapshot (the denominator)
+client_totals = (
+    df_unique.groupby("Identifiant Tiers")
+    .agg(total_products=("Produits", "size"),
+         join_date=("Date Création", "first"))
+)
+client_totals["tenure_days"] = (snapshot_date - client_totals["join_date"]).dt.days
+client_totals["join_year"] = client_totals["join_date"].dt.year
 
-# Consistent colors across panels
-families = window_mix_family["Famille Produit"].unique()
-colors = dict(zip(families, plt.cm.tab10(np.linspace(0, 1, len(families)))))
+# Per-client products by family (for the family-level breakdown)
+family_totals = (
+    df_unique.groupby(["Identifiant Tiers", "Famille Produit"])
+    .size()
+    .rename("family_total")
+    .reset_index()
+)
 
-for ax, m in zip(axes, windows_to_plot):
-    sub = window_mix_family[window_mix_family["window_months"] == m]
-    ax.scatter(sub["penetration_pct"], sub["share_of_window_pct"],
-               s=sub["n_subscriptions"] / sub["n_subscriptions"].max() * 800,
-               c=[colors[f] for f in sub["Famille Produit"]],
-               alpha=0.6, edgecolors="black")
-    for _, row in sub.iterrows():
-        ax.annotate(row["Famille Produit"],
-                    (row["penetration_pct"], row["share_of_window_pct"]),
-                    fontsize=8, ha="center")
-    ax.set_title(f"Month {m}")
-    ax.set_xlabel("Penetration (%)")
-    ax.grid(alpha=0.3)
+def pct_at_month(months):
+    threshold = months * 30.44
+    eligible = client_totals[client_totals["tenure_days"] >= threshold].index
+    
+    # Count each client's acquisitions within the window
+    acquired = (
+        df_unique[
+            (df_unique["Identifiant Tiers"].isin(eligible)) &
+            (df_unique["days_to_sub"] <= threshold)
+        ]
+        .groupby("Identifiant Tiers").size()
+        .reindex(eligible, fill_value=0)
+    )
+    
+    # Per-client ratio: acquired so far / final total
+    ratio = (acquired / client_totals.loc[eligible, "total_products"] * 100)
+    
+    return pd.DataFrame({
+        "window_months": months,
+        "client_id": ratio.index,
+        "pct_of_final": ratio.values,
+        "join_year": client_totals.loc[eligible, "join_year"].values,
+    })
 
-axes[0].set_ylabel("Share of window (%)")
-plt.suptitle("Family positioning: reach × activity share across lifecycle", y=1.02)
-plt.tight_layout()
-plt.show()
+per_client = pd.concat([pct_at_month(m) for m in windows], ignore_index=True)
+
+
+
+
+
+xxxxxx
+
+overall = (
+    per_client.groupby("window_months")["pct_of_final"]
+    .agg(["mean", "median", "std", "count"]).round(1)
+)
+print(overall)
+
+
+
+xxxxx
+
+
+by_year = (
+    per_client.groupby(["join_year", "window_months"])["pct_of_final"]
+    .mean().round(1).unstack("window_months")
+)
+print(by_year)
+
+
+
+
+xxxxx
+
+
+def pct_at_month_by_family(months):
+    threshold = months * 30.44
+    eligible = client_totals[client_totals["tenure_days"] >= threshold].index
+    
+    acquired_by_fam = (
+        df_unique[
+            (df_unique["Identifiant Tiers"].isin(eligible)) &
+            (df_unique["days_to_sub"] <= threshold)
+        ]
+        .groupby(["Identifiant Tiers", "Famille Produit"]).size()
+        .rename("acquired").reset_index()
+    )
+    
+    merged = family_totals[family_totals["Identifiant Tiers"].isin(eligible)].merge(
+        acquired_by_fam, on=["Identifiant Tiers", "Famille Produit"], how="left"
+    )
+    merged["acquired"] = merged["acquired"].fillna(0)
+    merged["pct_of_final"] = merged["acquired"] / merged["family_total"] * 100
+    merged["window_months"] = months
+    return merged
+
+per_client_family = pd.concat([pct_at_month_by_family(m) for m in windows],
+                               ignore_index=True)
+
+by_family = (
+    per_client_family.groupby(["Famille Produit", "window_months"])["pct_of_final"]
+    .mean().round(1).unstack("window_months")
+)
+print(by_family)
+
+
+xxxxxx
+
+# Option A: restrict the denominator to "mature" clients only (e.g. ≥3 years tenure),
+# which makes "final" a more meaningful endpoint
+mature = client_totals[client_totals["tenure_days"] >= 3 * 365].index
+per_client_mature = per_client[per_client["client_id"].isin(mature)]
+
+
+
+
+xxxxx
+
+
+# Option B: keep full population but report it explicitly with a tenure breakdown,
+# so readers can see how the curve shifts by maturity
+per_client = per_client.merge(
+    client_totals["tenure_days"].rename("tenure"), 
+    left_on="client_id", right_index=True
+)
+per_client["tenure_bucket"] = pd.cut(
+    per_client["tenure"] / 365,
+    bins=[0, 1, 2, 3, 5, 100],
+    labels=["<1yr", "1-2yr", "2-3yr", "3-5yr", "5yr+"]
+)
+by_tenure = (
+    per_client.groupby(["tenure_bucket", "window_months"], observed=True)["pct_of_final"]
+    .mean().round(1).unstack("window_months")
+)
+print(by_tenure)
+
