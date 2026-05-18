@@ -1,71 +1,78 @@
-flux_cols   = [f"Flux {m}"   for m in range(380, 386)]   # 380..385
-avoirs_cols = [f"Avoirs {m}" for m in range(380, 386)]
+# === MA status AT 384 (the prior snapshot, when they were still MA) ===
+# Flux test at 384 uses the 379-384 lookback... but you only have 380 onwards.
+# Best available proxy: 380-384 (5 months instead of 6) — flag this caveat.
+flux_at_384_cols = [f"Flux {m}" for m in range(380, 385)]   # 380..384, 5 months
+flux_sum_at_384  = df[flux_at_384_cols].fillna(0).sum(axis=1)
+avoirs_at_384    = df["Avoirs 384"].fillna(0)
 
-# NaN means no flux movement → fill with 0 for the sum
-df_flux   = df[flux_cols].fillna(0)
-df_avoirs = df[avoirs_cols].fillna(0)
+passed_flux_at_384   = flux_sum_at_384 >= 6000   # caveat: 5-month proxy
+passed_avoirs_at_384 = avoirs_at_384   >= 62000
 
-flux_6m_sum     = df_flux.sum(axis=1)
-avoirs_snapshot = df_avoirs["Avoirs 385"]
+# === MA status AT 385 (the downgrade snapshot) ===
+flux_at_385_cols = [f"Flux {m}" for m in range(380, 386)]   # 380..385, 6 months
+flux_sum_at_385  = df[flux_at_385_cols].fillna(0).sum(axis=1)
+avoirs_at_385    = df["Avoirs 385"].fillna(0)
 
-fails_flux   = flux_6m_sum < 6000
-fails_avoirs = avoirs_snapshot < 62000
+passed_flux_at_385   = flux_sum_at_385 >= 6000
+passed_avoirs_at_385 = avoirs_at_385   >= 62000
 
-print(f"Total in df: {len(df):,}\n")
-print(f"Fails flux (<6k over 380-385):      {fails_flux.sum():>6,}  ({fails_flux.mean()*100:.1f}%)")
-print(f"Fails avoirs (<62k at 385):         {fails_avoirs.sum():>6,}  ({fails_avoirs.mean()*100:.1f}%)")
-print(f"Fails BOTH (truly ineligible):      {(fails_flux & fails_avoirs).sum():>6,}")
-print(f"Fails only flux (still MA via avoirs): {(fails_flux & ~fails_avoirs).sum():>6,}")
-print(f"Fails only avoirs (still MA via flux): {(~fails_flux & fails_avoirs).sum():>6,}")
+# === Transitions ===
+lost_flux   = passed_flux_at_384   & ~passed_flux_at_385
+lost_avoirs = passed_avoirs_at_384 & ~passed_avoirs_at_385
 
-# Cross-tab view
-crosstab = pd.crosstab(
-    fails_flux.map({True: "Flux KO", False: "Flux OK"}),
-    fails_avoirs.map({True: "Avoirs KO", False: "Avoirs OK"}),
-    margins=True
+print(f"Total downgraded clients: {len(df):,}\n")
+
+print("=== Status at 384 (when still MA) ===")
+print(f"  Passed flux test:           {passed_flux_at_384.sum():>6,}  ({passed_flux_at_384.mean()*100:.1f}%)")
+print(f"  Passed avoirs test:         {passed_avoirs_at_384.sum():>6,}  ({passed_avoirs_at_384.mean()*100:.1f}%)")
+print(f"  Passed both:                {(passed_flux_at_384 & passed_avoirs_at_384).sum():>6,}")
+print(f"  Passed only flux:           {(passed_flux_at_384 & ~passed_avoirs_at_384).sum():>6,}")
+print(f"  Passed only avoirs:         {(~passed_flux_at_384 & passed_avoirs_at_384).sum():>6,}")
+
+print("\n=== What broke between 384 and 385 ===")
+print(f"  Lost flux test:             {lost_flux.sum():>6,}")
+print(f"  Lost avoirs test:           {lost_avoirs.sum():>6,}")
+print(f"  Lost both this month:       {(lost_flux & lost_avoirs).sum():>6,}")
+
+# Cross-tab: rows = status at 384, cols = status at 385
+status_384 = pd.Series(
+    np.select(
+        [passed_flux_at_384 & passed_avoirs_at_384, passed_flux_at_384, passed_avoirs_at_384],
+        ["Both", "Flux only", "Avoirs only"],
+        default="Neither"
+    ),
+    index=df.index, name="Status @ 384"
 )
-print("\n", crosstab)
+status_385 = pd.Series(
+    np.select(
+        [passed_flux_at_385 & passed_avoirs_at_385, passed_flux_at_385, passed_avoirs_at_385],
+        ["Both", "Flux only", "Avoirs only"],
+        default="Neither (downgrade)"
+    ),
+    index=df.index, name="Status @ 385"
+)
+print("\n", pd.crosstab(status_384, status_385, margins=True))
 
 
 
-xxxxxx
+flux_drop_385   = df["Flux 384"].fillna(0)   - df["Flux 385"].fillna(0)
+avoirs_drop_385 = df["Avoirs 384"].fillna(0) - df["Avoirs 385"].fillna(0)
 
+# Compare to their own pre-385 baseline (avg 380-384) to see if 385 is a break or a continuation
+flux_baseline   = df[[f"Flux {m}"   for m in range(380, 385)]].fillna(0).mean(axis=1)
+avoirs_baseline = df[[f"Avoirs {m}" for m in range(380, 385)]].fillna(0).mean(axis=1)
 
+print("Median drop at 385:")
+print(f"  Flux   384→385:           {flux_drop_385.median():>10,.0f}")
+print(f"  Flux   vs 5m baseline:    {(flux_baseline - df['Flux 385'].fillna(0)).median():>10,.0f}")
+print(f"  Avoirs 384→385:           {avoirs_drop_385.median():>10,.0f}")
+print(f"  Avoirs vs 5m baseline:    {(avoirs_baseline - df['Avoirs 385'].fillna(0)).median():>10,.0f}")
 
-flux_prev_avg   = df[[f"Flux {m}"   for m in range(380, 385)]].fillna(0).mean(axis=1)
-avoirs_prev_avg = df[[f"Avoirs {m}" for m in range(380, 385)]].fillna(0).mean(axis=1)
-
-flux_385   = df["Flux 385"].fillna(0)
-flux_384   = df["Flux 384"].fillna(0)
-avoirs_385 = df["Avoirs 385"].fillna(0)
-avoirs_384 = df["Avoirs 384"].fillna(0)
-
-drops = pd.DataFrame({
-    "flux_385":          flux_385,
-    "flux_384":          flux_384,
-    "flux_prev_5m_avg":  flux_prev_avg,
-    "flux_drop_vs_384":  flux_384 - flux_385,
-    "flux_drop_vs_avg":  flux_prev_avg - flux_385,
-    "avoirs_385":            avoirs_385,
-    "avoirs_384":            avoirs_384,
-    "avoirs_prev_5m_avg":    avoirs_prev_avg,
-    "avoirs_drop_vs_384":    avoirs_384 - avoirs_385,
-    "avoirs_drop_vs_avg":    avoirs_prev_avg - avoirs_385,
-})
-
-# Aggregate summary
-summary = drops[[
-    "flux_drop_vs_384", "flux_drop_vs_avg",
-    "avoirs_drop_vs_384", "avoirs_drop_vs_avg",
-]].agg(["mean", "median", "sum"]).round(1)
-print(summary)
-
-# Percentage drops (median is safer than mean here — outliers and divide-by-zero distort the mean)
-pct = pd.DataFrame({
-    "flux_pct_drop_vs_384":   (1 - flux_385   / flux_384.replace(0, pd.NA))   * 100,
-    "flux_pct_drop_vs_avg":   (1 - flux_385   / flux_prev_avg.replace(0, pd.NA))   * 100,
-    "avoirs_pct_drop_vs_384": (1 - avoirs_385 / avoirs_384.replace(0, pd.NA)) * 100,
-    "avoirs_pct_drop_vs_avg": (1 - avoirs_385 / avoirs_prev_avg.replace(0, pd.NA)) * 100,
-})
-print("\nMedian % drop:")
-print(pct.median().round(1))
+# Segment the drops by which test was lost — more diagnostic
+for label, mask in [("Lost flux only", lost_flux & ~lost_avoirs),
+                    ("Lost avoirs only", ~lost_flux & lost_avoirs),
+                    ("Lost both", lost_flux & lost_avoirs)]:
+    sub = df[mask]
+    print(f"\n{label} (n={mask.sum():,}):")
+    print(f"  Median flux drop 384→385:   {(sub['Flux 384'].fillna(0)   - sub['Flux 385'].fillna(0)).median():>10,.0f}")
+    print(f"  Median avoirs drop 384→385: {(sub['Avoirs 384'].fillna(0) - sub['Avoirs 385'].fillna(0)).median():>10,.0f}")
