@@ -6,7 +6,8 @@
 - **5 sous-modeles** : Epargne (encours), Investissements (encours), Credit immobilier (encours), Autres credits (encours), Autre PNB (NBI direct)
 - **Conversion** : encours x taux de marge = NBI (pour les 4 premiers modeles)
 - **Calibration** : lissage par deciles — chaque client recoit la moyenne observee de son decile
-- **CLV** : somme(NBI x croissance^t x survie(t) / (1+r)^t) sur 5 ans
+- **CLV** : somme(NBI x croissance^t / (1+r)^t) sur 5 ans
+- **Churn** : pas de modele de churn separe — l'attrition est implicitement capturee dans les valeurs cumulees (un client parti a 2 ans a des encours nuls pour les annees 3-5)
 - **Taux de marge** : fournis par la Finance (deja recus)
 
 ---
@@ -31,8 +32,8 @@ Combien de nouveaux clients par trimestre ? On a besoin d'un volume suffisant po
 ### I6 — Snapshot equipements a M+3 disponible
 Les fichiers d'equipements trimestriels permettent-ils de reconstituer les produits detenus par chaque client 3 mois apres son acquisition ?
 
-### I7 — Donnees de depart (churn) disponibles
-Peut-on identifier quels clients sont partis et quand ? On a besoin des taux de survie pour la formule CLV. Sans donnees de churn, la CLV se resume a une somme de NBI sans ajustement de retention.
+### I7 — ~~Donnees de depart (churn)~~ NON NECESSAIRE
+~~Peut-on identifier quels clients sont partis et quand ?~~ **Pas besoin d'un modele de churn separe.** L'attrition est implicitement capturee dans les donnees d'entrainement : les clients partis ont des encours nuls apres leur depart, ce qui reduit leur valeur cumulee et celle de leur decile. La tenure sera fortement correlee a la valeur predite.
 
 ---
 
@@ -69,11 +70,11 @@ Peut-on identifier quels clients sont partis et quand ? On a besoin des taux de 
 **Si stable** : Facteurs de croissance constants dans la CLV.
 **Si instable** : Facteurs conditionnels par segment ou par niveau d'encours initial.
 
-### H7 — La survie depend du mix produit
-**Analyse** : Les clients avec un credit immobilier + domiciliation du salaire ont-ils un taux de depart plus faible ? Comparer les courbes de survie par profil d'equipement.
+### H7 — Les clients avec plus de produits restent plus longtemps
+**Analyse** : Les clients avec un credit immobilier + domiciliation du salaire ont-ils des encours cumules plus eleves (signe qu'ils restent plus longtemps) ? La tenure implicite est-elle correlee au nombre de produits a M+3 ?
 
-**Si valide** : Utiliser S(t | profil equipement) dans la CLV.
-**Si invalide** : S(t) unique par segment.
+**Si valide** : Les deciles des clients multi-equipes auront naturellement des moyennes plus elevees car ils restent plus longtemps. Pas besoin d'ajustement — l'effet est capture automatiquement.
+**Si invalide** : L'equipement n'est pas un facteur d'ancrage — la valeur du client est independante de sa retention.
 
 ### H8 — Le modele est stable entre les cohortes
 **Analyse** : La relation entre les features a M+3 et les encours/NBI long terme est-elle stable entre 2021 et 2024 ?
@@ -92,5 +93,5 @@ Peut-on identifier quels clients sont partis et quand ? On a besoin des taux de 
 | H4 | Regression standard | Modele deux etapes pour les familles creuses |
 | H5 | Snapshot M+3 fiable pour 5 ans | Facteurs de croissance compensatoires |
 | H6 | Croissance constante dans la CLV | Facteurs conditionnels |
-| H7 | Survie conditionnelle au mix | Survie unique par segment |
+| H7 | L'equipement est un facteur d'ancrage | L'equipement n'impacte pas la retention |
 | H8 | Retraining annuel | Retraining trimestriel |

@@ -119,7 +119,15 @@ Les bornes et moyennes de deciles sont calculees sur les **predictions out-of-fo
 
 ---
 
-## 6. Formule CLV
+## 6. Churn et survie
+
+Pas de modele de churn separe. Le churn est **implicitement capture** dans les donnees d'entrainement : un client parti apres 2 ans aura des encours nuls pour les annees 3-5. La valeur cumulee sur 5 ans reflete donc naturellement l'attrition. Les moyennes par decile integrent cette attrition — un decile qui contient des profils a fort risque de depart aura une moyenne plus basse car elle inclut les clients partis.
+
+La **tenure** (duree de presence) sera fortement correlee avec la valeur cumulee et servira implicitement de proxy de retention.
+
+---
+
+## 7. Formule CLV
 
 ```
 Pour chaque famille f parmi {epargne, invest, immo, autres_cr, autre_pnb} :
@@ -129,12 +137,13 @@ Pour chaque famille f parmi {epargne, invest, immo, autres_cr, autre_pnb} :
 
 NBI_total = somme(NBI_f)
 
-CLV = somme(t=1..5) [ NBI_total x g^(t-1) x S(t) / (1+r)^t ]
+CLV = somme(t=1..5) [ NBI_total x g^(t-1) / (1+r)^t ]
 
-    g    = facteur de croissance annuel (calibre par famille sur donnees historiques)
-    S(t) = probabilite de survie a l'annee t
-    r    = taux d'actualisation
+    g = facteur de croissance annuel (calibre par famille sur donnees historiques)
+    r = taux d'actualisation
 ```
+
+Note : pas de terme S(t) explicite — la survie est deja integree dans les valeurs cumulees predites et lissees par les deciles.
 
 ### Decomposition par produit
 
@@ -154,7 +163,7 @@ Cela permet d'identifier **d'ou vient la valeur** de chaque client et d'adapter 
 
 ---
 
-## 7. Validation
+## 8. Validation
 
 - **Walk-forward temporelle** : entrainer sur les cohortes anciennes, valider sur les cohortes recentes
 - **Par sous-modele** : MAE, R2, Spearman par famille
@@ -164,7 +173,7 @@ Cela permet d'identifier **d'ou vient la valeur** de chaque client et d'adapter 
 
 ---
 
-## 8. Structure du projet
+## 9. Structure du projet
 
 ```
 Acquisition_model/
