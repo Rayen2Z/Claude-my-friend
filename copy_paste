@@ -1,3 +1,26 @@
+# ── Vue « fenêtre flux complète » ───────────────────────────────────────────
+# On ne garde que les déclassements où le test des 6 mois est calculable à t ET
+# à t+1 (≈ déclassements à partir de la période 382). Cela retire les catégories
+# « Indéterminé » et rend l'attribution de cause nette. Le reste de l'analyse
+# continue d'utiliser `dg` complet (12 mois).
+dg_clean = dg[dg["inflow_pass_t"].notna() & dg["inflow_pass_d"].notna()].copy()
+
+print(f"\n{'='*60}")
+print(f"FENÊTRE FLUX COMPLÈTE — {len(dg_clean):,} déclassements "
+      f"({len(dg_clean)/len(dg)*100:.0f}% du total) avec test flux déterminable")
+print(f"{'='*60}")
+
+trig_clean = dg_clean["trigger"].value_counts()
+print("Déclencheur (fenêtre complète uniquement) :")
+for k, v in trig_clean.items():
+    print(f"  {k:<34} {v:>6,}  ({v/len(dg_clean)*100:4.1f}%)")
+
+print("\nÀ t+1 (fenêtre complète) :")
+print(f"  Avoirs < 62k                       : {dg_clean['avoirs_ko_d'].mean()*100:4.1f}%")
+print(f"  Test flux non satisfait            : {dg_clean['flux_ko_d'].mean()*100:4.1f}%")
+print(f"  Les deux KO simultanément          : {(dg_clean['avoirs_ko_d'] & dg_clean['flux_ko_d']).mean()*100:4.1f}%")
+
+
 # ╔══════════════════════════════════════════════════════════════════════════╗
 # ║  ANALYSE DU DÉCLASSEMENT MASS AFFLUENT — Périodes 377 → 389 (≈ 13 mois)    ║
 # ║  Panel long : 1 ligne par (client × période).                              ║
