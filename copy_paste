@@ -1,28 +1,6 @@
-# ── Vue « fenêtre flux complète » ───────────────────────────────────────────
-# On ne garde que les déclassements où le test des 6 mois est calculable à t ET
-# à t+1 (≈ déclassements à partir de la période 382). Cela retire les catégories
-# « Indéterminé » et rend l'attribution de cause nette. Le reste de l'analyse
-# continue d'utiliser `dg` complet (12 mois).
-dg_clean = dg[dg["inflow_pass_t"].notna() & dg["inflow_pass_d"].notna()].copy()
-
-print(f"\n{'='*60}")
-print(f"FENÊTRE FLUX COMPLÈTE — {len(dg_clean):,} déclassements "
-      f"({len(dg_clean)/len(dg)*100:.0f}% du total) avec test flux déterminable")
-print(f"{'='*60}")
-
-trig_clean = dg_clean["trigger"].value_counts()
-print("Déclencheur (fenêtre complète uniquement) :")
-for k, v in trig_clean.items():
-    print(f"  {k:<34} {v:>6,}  ({v/len(dg_clean)*100:4.1f}%)")
-
-print("\nÀ t+1 (fenêtre complète) :")
-print(f"  Avoirs < 62k                       : {dg_clean['avoirs_ko_d'].mean()*100:4.1f}%")
-print(f"  Test flux non satisfait            : {dg_clean['flux_ko_d'].mean()*100:4.1f}%")
-print(f"  Les deux KO simultanément          : {(dg_clean['avoirs_ko_d'] & dg_clean['flux_ko_d']).mean()*100:4.1f}%")
-
-
 # ╔══════════════════════════════════════════════════════════════════════════╗
-# ║  ANALYSE DU DÉCLASSEMENT MASS AFFLUENT — Périodes 377 → 389 (≈ 13 mois)    ║
+# ║  ANALYSE DU DÉCLASSEMENT MASS AFFLUENT                                      ║
+# ║  Données : périodes 371 → 389 (371–376 = lookback flux ; 377–389 analysé). ║
 # ║  Panel long : 1 ligne par (client × période).                              ║
 # ║                                                                            ║
 # ║  Règles métier (logique OU) :                                              ║
@@ -59,6 +37,8 @@ INFLOW_MIN    = 6_000      # flux mensuel minimum
 INFLOW_WINDOW = 6          # nb de mois consécutifs où le flux doit tenir
 MA_LABEL      = "Mass Affluent"
 EPOCH_YEAR    = 1994       # référentiel mois bancaire (Janvier 1994 = 1)
+ANALYSIS_START = 377       # 05/2025 : 1er mois de déclassement analysé.
+                           # Les périodes 371–376 servent uniquement d'historique flux (lookback).
 
 FIG_DIR = Path("declassement_figures")
 FIG_DIR.mkdir(exist_ok=True)
@@ -100,8 +80,9 @@ def _to_num(series):
 
 # ── Démo hors-ligne : décommenter pour tester le pipeline sans vraies données ─
 # rng = np.random.default_rng(0)
-# _ids = np.repeat(np.arange(1000), 13)
-# _per = np.tile(np.arange(377, 390), 1000)
+# _nper = 389 - 371 + 1
+# _ids = np.repeat(np.arange(1000), _nper)
+# _per = np.tile(np.arange(371, 390), 1000)
 # df = pd.DataFrame({
 #     "identifiant_tiers": _ids, "période": _per,
 #     "segment_upgrade": "Mass Affluent",
@@ -133,7 +114,7 @@ HAS_PROFIL = "profil" in data.columns
 # ── Typage ───────────────────────────────────────────────────────────────────
 data["periode"] = pd.to_numeric(data["periode"], errors="coerce").astype("Int64")
 data["avoirs"]  = _to_num(data["avoirs"])
-data["inflow"]  = _to_num(data["inflow"])
+data["inflow"]  = _to_num(data["inflow"]).fillna(0)   # ligne présente sans flux = 0 € ce mois-ci
 data["segment"] = data["segment"].astype(str).str.strip()
 data = data.dropna(subset=["id", "periode"]).drop_duplicates(["id", "periode"])
 data["periode"] = data["periode"].astype(int)
@@ -183,8 +164,9 @@ plt.tight_layout(); plt.savefig(FIG_DIR / "01_ma_prevalence.png", bbox_inches="t
 #
 # - **Test avoirs** : `avoirs ≥ 62 000 €`.
 # - **Test flux** : `flux ≥ 6 000 €` pour CHACUN des 6 derniers mois (t-5..t).
-#   La fenêtre complète n'est calculable qu'à partir de la **période 382**
-#   (377..382). Avant → test flux *indéterminé* (NaN), signalé comme caveat.
+#   La fenêtre complète n'est calculable qu'à partir de la 6e période observée.
+#   Avec le lookback 371–376, toute la fenêtre d'analyse (≥ 377) est couverte ;
+#   avant la 6e période → test flux *indéterminé* (NaN).
 
 # %%
 avoirs_pass_wide = avoirs_wide >= AVOIRS_MIN           # bool
@@ -224,7 +206,7 @@ def _lookup(wide, ids, p):
 rows = []
 for p in periods:
     nxt = p + 1
-    if nxt not in seg_wide.columns:
+    if nxt not in seg_wide.columns or nxt < ANALYSIS_START:   # 371–376 = lookback seulement
         continue
     was_ma  = (seg_wide[p] == MA_LABEL)
     now_seg = seg_wide[nxt]
@@ -307,19 +289,51 @@ ct = pd.crosstab(dg["statut_t"], dg["statut_d"])
 print("\nTable de transition  statut@t (lignes)  ×  statut@t+1 (colonnes) :")
 print(ct.to_string())
 
+# ── Vue « fenêtre flux complète » ────────────────────────────────────────────
+# Déclassements où le test des 6 mois est calculable à t ET à t+1 (élimine les
+# « indéterminé »). Avec le lookback 371–376, ce sous-ensemble ≈ tout `dg`.
+dg_clean = dg[dg["inflow_pass_t"].notna() & dg["inflow_pass_d"].notna()].copy()
+print(f"\n{'='*60}")
+print(f"FENÊTRE FLUX COMPLÈTE — {len(dg_clean):,} déclassements "
+      f"({len(dg_clean)/max(len(dg),1)*100:.0f}% du total) avec test flux déterminable")
+print(f"{'='*60}")
+trig_clean = dg_clean["trigger"].value_counts()
+print("Déclencheur (fenêtre complète uniquement) :")
+for k, v in trig_clean.items():
+    print(f"  {k:<34} {v:>6,}  ({v/max(len(dg_clean),1)*100:4.1f}%)")
+print("\nÀ t+1 (fenêtre complète) :")
+print(f"  Avoirs < 62k                       : {dg_clean['avoirs_ko_d'].mean()*100:4.1f}%")
+print(f"  Test flux non satisfait            : {dg_clean['flux_ko_d'].mean()*100:4.1f}%")
+print(f"  Les deux KO simultanément          : {(dg_clean['avoirs_ko_d'] & dg_clean['flux_ko_d']).mean()*100:4.1f}%")
+
+# ── E2. Sévérité de la rupture de flux ───────────────────────────────────────
+# Parmi les déclassements « Flux », combien de mois (sur 6) qualifiaient encore ?
+# qual_d = 5 -> un seul mois a décroché = fragilité de bord, très réversible.
+flux_dg = dg[dg["trigger"] == "Flux"]
+if len(flux_dg):
+    print("\nSévérité de la rupture flux — mois qualifiants (≥6k) sur 6 au déclassement :")
+    print(flux_dg["qual_d"].value_counts().sort_index().to_string())
+    # ── E3. Coussin d'avoirs lors d'un déclassement flux ─────────────────────
+    cush = flux_dg["avoirs_d"].dropna()
+    if len(cush):
+        print(f"\nAvoirs au déclassement (cause flux) — médiane {cush.median():,.0f} € | "
+              f"part 40–62k : {((cush >= 40_000) & (cush < AVOIRS_MIN)).mean()*100:.1f}%")
+
 # ── Figure : déclencheurs (barres) + segment cible (camembert) ───────────────
 order = ["Avoirs", "Flux", "Les deux", "Avoirs (flux indéterminé)",
          "Indéterminé (fenêtre flux)", "Anomalie (règle dit encore MA)"]
-trig_o = trig.reindex([o for o in order if o in trig.index])
 cmap = {"Avoirs": COL["avoirs"], "Flux": COL["flux"], "Les deux": COL["both"],
         "Avoirs (flux indéterminé)": COL["avoirs"], "Indéterminé (fenêtre flux)": COL["anom"],
         "Anomalie (règle dit encore MA)": COL["anom"]}
+# Figure basée sur la fenêtre flux complète (vue nette)
+trig_o = trig_clean.reindex([o for o in order if o in trig_clean.index])
+den = max(len(dg_clean), 1)
 fig, axes = plt.subplots(1, 2, figsize=(15, 5.5))
 axes[0].barh([str(i) for i in trig_o.index][::-1], trig_o.values[::-1],
              color=[cmap.get(i, COL["dark"]) for i in trig_o.index][::-1], edgecolor="white")
-axes[0].set_title("Déclencheur du déclassement")
+axes[0].set_title("Déclencheur du déclassement (fenêtre flux complète)")
 for y, v in enumerate(trig_o.values[::-1]):
-    axes[0].text(v, y, f" {v:,} ({v/len(dg)*100:.0f}%)", va="center", fontsize=9)
+    axes[0].text(v, y, f" {v:,} ({v/den*100:.0f}%)", va="center", fontsize=9)
 tgt = dg["target_segment"].value_counts()
 axes[1].pie(tgt.values, labels=tgt.index, autopct="%1.0f%%", startangle=90,
             colors=[COL["flux"], COL["accent"], COL["anom"]])
@@ -418,6 +432,7 @@ for p in periods:
     ma_p = (seg_wide[p] == MA_LABEL) & seg_wide[p + 1].notna()
     risk_rows.append(pd.DataFrame({"id": ma_p[ma_p].index, "periode": p}))
 risk = pd.concat(risk_rows, ignore_index=True)
+risk = risk[risk["periode"] >= ANALYSIS_START - 1].copy()   # dénominateur aligné sur la fenêtre analysée
 dgset = set(zip(dg.id, dg.t))
 risk["down"] = [(i, p) in dgset for i, p in zip(risk.id, risk.periode)]
 if HAS_FRONT:
@@ -446,39 +461,86 @@ if HAS_FRONT:
     mix = (pd.crosstab(dg["frontalier"].astype(str), dg["trigger"], normalize="index") * 100).round(1)
     print("\nMix des déclencheurs par frontalier (%) :"); print(mix.to_string())
 
+# ── Barres « taux de déclassement » ventilées par cause ──────────────────────
+# Longueur totale = taux du groupe ; découpage = part de chaque déclencheur.
+CAUSES = ["Avoirs", "Flux", "Les deux", "Anomalie (règle dit encore MA)"]
+cause_cols = {"Avoirs": COL["avoirs"], "Flux": COL["flux"],
+              "Les deux": COL["both"], "Anomalie (règle dit encore MA)": COL["anom"]}
+
+def rate_stacked_by_cause(col, top=10):
+    denom = risk.groupby(risk[col].astype(str))["down"].agg(n="size", d="sum")
+    denom["rate"] = denom["d"] / denom["n"] * 100
+    mix = pd.crosstab(dg[col].astype(str), dg["trigger"])
+    for c in CAUSES:
+        if c not in mix.columns:
+            mix[c] = 0
+    share = mix[CAUSES].div(mix[CAUSES].sum(axis=1).replace(0, np.nan), axis=0).fillna(0)
+    seg = share.mul(denom["rate"], axis=0)                       # longueur = taux × part
+    keep = denom.sort_values("rate", ascending=False).head(top).index
+    return seg.reindex(keep).iloc[::-1]                          # plus fort en haut
+
 if panels:
-    fig, axes = plt.subplots(1, len(panels), figsize=(7.5 * len(panels), 5), squeeze=False)
+    fig, axes = plt.subplots(1, len(panels), figsize=(8 * len(panels), 5.2), squeeze=False)
     for ax, col in zip(axes[0], panels):
-        t = _rate_table(col).head(10).iloc[::-1]
-        ax.barh(t.index, t["taux_%"], color=COL["both"], edgecolor="white")
-        ax.set_title(f"Taux de déclassement par {col}"); ax.set_xlabel("% (pop. à risque)")
-        for y, v in enumerate(t["taux_%"]):
-            ax.text(v, y, f" {v}%", va="center", fontsize=9)
-    plt.tight_layout(); plt.savefig(FIG_DIR / "06_coupes_groupes.png", bbox_inches="tight", facecolor="white"); plt.show()
+        seg = rate_stacked_by_cause(col)
+        left = np.zeros(len(seg))
+        for c in CAUSES:
+            ax.barh(seg.index, seg[c], left=left, color=cause_cols[c], edgecolor="white", label=c)
+            left += seg[c].values
+        for y, tot in enumerate(left):
+            ax.text(tot, y, f" {tot:.1f}%", va="center", fontsize=9)
+        ax.set_title(f"Taux de déclassement par {col} — ventilé par cause")
+        ax.set_xlabel("% (pop. à risque)")
+    axes[0][0].legend(fontsize=8, loc="lower right")
+    plt.tight_layout(); plt.savefig(FIG_DIR / "06_taux_par_cause.png", bbox_inches="tight", facecolor="white"); plt.show()
 
 
 # %% [markdown]
-# # 8. Saisonnalité — quand se produisent les déclassements ?
+# # 8. Dynamique mensuelle — sorties vs entrées du portefeuille MA
 #
-# Répartition par mois calendaire, empilée par déclencheur. Un pic sur un mois
-# précis (bornes annuelles, primes, fiscalité) oriente vers une cause exogène
-# plutôt qu'une dérive individuelle.
+# Barres (axe gauche) = volume de déclassements par mois, empilé par déclencheur
+# (saisonnalité + cause). Lignes normalisées (axe droit) = **taux de déclassement**
+# et **taux d'acquisition MA** (mouvement inverse), en % de la population MA du mois.
+# Quand la ligne « sortie » passe au-dessus de la ligne « entrée », le pool MA se vide.
 
 # %%
-by_month = pd.crosstab(dg["mois_declassement"], dg["trigger"]).sort_index()
-print("Déclassements par mois × déclencheur :")
-print(by_month.to_string())
+# Acquisitions MA (non-MA -> MA) et population MA à risque, par mois d'analyse
+months, acq_ma, ma_pop = [], {}, {}
+for p in periods:
+    nxt = p + 1
+    if nxt not in seg_wide.columns or nxt < ANALYSIS_START:
+        continue
+    m = idx_to_ym(nxt); months.append(m)
+    acq_ma[m] = int(((seg_wide[p].notna()) & (seg_wide[p] != MA_LABEL) & (seg_wide[nxt] == MA_LABEL)).sum())
+    ma_pop[m] = int((seg_wide[p] == MA_LABEL).sum())        # pool exposé = MA au mois précédent
+ma_pop = pd.Series(ma_pop).reindex(months)
+acq_ma = pd.Series(acq_ma).reindex(months)
+by_cause = pd.crosstab(dg["mois_declassement"], dg["trigger"]).reindex(months, fill_value=0)
+down_rate = by_cause.sum(axis=1) / ma_pop * 100
+acq_rate  = acq_ma / ma_pop * 100
 
-fig, ax = plt.subplots(figsize=(13, 5.5))
-bottom = np.zeros(len(by_month))
-for trg in [c for c in order if c in by_month.columns]:
-    ax.bar(by_month.index, by_month[trg], bottom=bottom,
-           label=trg, color=cmap.get(trg, COL["dark"]), edgecolor="white")
-    bottom += by_month[trg].values
-ax.set_title("Déclassements par mois (empilés par déclencheur)")
-ax.set_ylabel("Nb de déclassements"); ax.legend(fontsize=8, ncol=2)
+print("Déclassements par mois × déclencheur :")
+print(by_cause.to_string())
+print(f"\nTaux de déclassement mensuel — min {down_rate.min():.1f}% / max {down_rate.max():.1f}%")
+
+fig, ax = plt.subplots(figsize=(14, 6))
+bottom = np.zeros(len(months))
+for trg in [c for c in order if c in by_cause.columns]:
+    ax.bar(months, by_cause[trg], bottom=bottom, label=trg,
+           color=cmap.get(trg, COL["dark"]), edgecolor="white")
+    bottom += by_cause[trg].values
+ax.set_ylabel("Nb de déclassements (barres)"); ax.set_xlabel("Mois")
+ax.legend(loc="upper left", fontsize=8, ncol=2)
 plt.xticks(rotation=45, ha="right")
-plt.tight_layout(); plt.savefig(FIG_DIR / "07_saisonnalite.png", bbox_inches="tight", facecolor="white"); plt.show()
+
+ax2 = ax.twinx(); ax2.grid(False)
+ax2.plot(months, down_rate.values, "o-", color=COL["accent"], lw=2.5, label="Taux de déclassement (%)")
+ax2.plot(months, acq_rate.values, "s--", color=COL["dark"], lw=2, alpha=0.7, label="Taux d'acquisition MA (%)")
+ax2.set_ylabel("% de la population MA (lignes)")
+ax2.set_ylim(0, max(down_rate.max(), acq_rate.max()) * 1.25)
+ax2.legend(loc="upper right", fontsize=8)
+ax.set_title("Dynamique mensuelle du portefeuille Mass Affluent — sorties vs entrées")
+plt.tight_layout(); plt.savefig(FIG_DIR / "07_dynamique_mensuelle.png", bbox_inches="tight", facecolor="white"); plt.show()
 
 
 # %% [markdown]
@@ -489,17 +551,94 @@ plt.tight_layout(); plt.savefig(FIG_DIR / "07_saisonnalite.png", bbox_inches="ti
 # réelle de valeur.
 
 # %%
-recovered = []
-for _, r in dg_first.iterrows():
-    future = [seg_wide[p].get(r.id) for p in periods if p > r.d and p in seg_wide.columns]
-    recovered.append(any(s == MA_LABEL for s in future))
-rec_rate = np.mean(recovered) * 100 if recovered else float("nan")
+# dg_first reconstruit ICI pour disposer de la colonne `trigger` (ajoutée en section 4)
+dg_first = dg.sort_values("d").drop_duplicates("id", keep="first").copy()
+
+def _recovers(cid, d):
+    return any(seg_wide[p].get(cid) == MA_LABEL for p in periods if p > d and p in seg_wide.columns)
+
+dg_first["recovered"] = [_recovers(i, d) for i, d in zip(dg_first["id"], dg_first["d"])]
+rec_rate = dg_first["recovered"].mean() * 100 if len(dg_first) else float("nan")
 print(f"Clients déclassés repassant MA avant la fin de la fenêtre : {rec_rate:.1f}% "
-      f"({int(np.sum(recovered)):,}/{len(dg_first):,})")
+      f"({int(dg_first['recovered'].sum()):,}/{len(dg_first):,})")
+
+# ── E1. Réversibilité PAR CAUSE ──────────────────────────────────────────────
+# Hypothèse : les déclassements « Flux » (un mois qui décroche) reviennent plus
+# souvent que les « Avoirs » (vraie érosion) → argument pour lisser le critère.
+rec_by_cause = dg_first.groupby("trigger")["recovered"].agg(
+    taux_retour=lambda s: round(s.mean() * 100, 1), n="size").sort_values("taux_retour", ascending=False)
+print("\nTaux de retour MA par déclencheur :")
+print(rec_by_cause.to_string())
+
+sub = rec_by_cause[rec_by_cause.index.isin(CAUSES)]
+if len(sub):
+    fig, ax = plt.subplots(figsize=(9, 4.5))
+    ax.bar(sub.index, sub["taux_retour"], color=[cause_cols.get(c, COL["dark"]) for c in sub.index],
+           edgecolor="white")
+    for i, (v, n) in enumerate(zip(sub["taux_retour"], sub["n"])):
+        ax.text(i, v, f"{v:.0f}%\n(n={n:,})", ha="center", va="bottom", fontsize=9)
+    ax.set_title("Réversibilité du déclassement par cause"); ax.set_ylabel("% repassant MA")
+    ax.set_ylim(0, 105); plt.xticks(rotation=15, ha="right")
+    plt.tight_layout(); plt.savefig(FIG_DIR / "08_reversibilite_cause.png", bbox_inches="tight", facecolor="white"); plt.show()
 
 
 # %% [markdown]
-# # 10. Synthèse pour la direction — À COMPLÉTER après exécution
+# # 10. Ancienneté Mass Affluent avant déclassement
+#
+# Depuis combien de mois consécutifs un client est-il MA au moment où il décroche ?
+# On mesure la **longueur de la série MA** finissant au dernier mois MA (t), puis le
+# **taux de déclassement par tranche d'ancienneté** sur la population à risque.
+#
+# ⚠️ Ancienneté **censurée à gauche** : on n'observe qu'à partir de la période 371,
+# donc un client MA de longue date apparaît au plus avec ~19 mois d'ancienneté.
+# La comparaison *récents vs installés* reste valide ; l'absolu est sous-estimé.
+#
+# Lecture attendue : corrélation **négative** (les MA installés sont plus stables ;
+# les MA récents, souvent portés par un flux fragile, décrochent davantage).
+
+# %%
+ma_bool = (seg_wide == MA_LABEL)
+streak = pd.DataFrame(index=ma_bool.index)
+run = pd.Series(0, index=ma_bool.index)
+for p in periods:                                   # série MA consécutive finissant à p
+    col = ma_bool[p].fillna(False)
+    run = (run + 1).where(col, 0)                   # +1 si MA, sinon remise à 0
+    streak[p] = run
+streak_long = streak.reset_index().melt(id_vars="id", var_name="periode", value_name="ma_tenure")
+
+# Ancienneté au dernier mois MA (t) pour chaque déclassement
+dg = dg.merge(streak_long.rename(columns={"periode": "t"}), on=["id", "t"], how="left")
+ten = dg["ma_tenure"].dropna()
+print(f"Ancienneté MA avant déclassement — médiane {ten.median():.0f} mois | "
+      f"moyenne {ten.mean():.1f} | part ≤ 6 mois : {(ten <= 6).mean()*100:.1f}%")
+
+# Taux de déclassement par tranche d'ancienneté (population à risque)
+risk_ten = risk.merge(streak_long, on=["id", "periode"], how="left")
+risk_ten["tranche"] = pd.cut(risk_ten["ma_tenure"], bins=[0, 3, 6, 12, 10_000],
+                             labels=["1-3", "4-6", "7-12", "13+"], include_lowest=True)
+rate_ten = risk_ten.groupby("tranche")["down"].agg(n="size", taux=lambda s: s.mean() * 100)
+print("\nTaux de déclassement par ancienneté MA :")
+print(rate_ten.assign(taux=lambda d: d["taux"].round(2)).to_string())
+
+corr = np.corrcoef(risk_ten["ma_tenure"].fillna(0), risk_ten["down"].astype(int))[0, 1]
+print(f"\nCorrélation ancienneté ↔ déclassement : {corr:+.3f} "
+      f"({'plus ancien = plus stable' if corr < 0 else 'à interpréter'})")
+
+fig, axes = plt.subplots(1, 2, figsize=(15, 5))
+axes[0].hist(ten.clip(upper=ten.quantile(0.98)), bins=25, color=COL["both"], edgecolor="white")
+axes[0].axvline(6, color=COL["accent"], ls="--", label="6 mois")
+axes[0].set_title("Ancienneté MA au moment du déclassement")
+axes[0].set_xlabel("Mois MA consécutifs"); axes[0].legend()
+axes[1].bar(rate_ten.index.astype(str), rate_ten["taux"], color=COL["flux"], edgecolor="white")
+axes[1].set_title("Taux de déclassement par ancienneté MA")
+axes[1].set_xlabel("Ancienneté (mois)"); axes[1].set_ylabel("% (pop. à risque)")
+for i, v in enumerate(rate_ten["taux"]):
+    axes[1].text(i, v, f"{v:.1f}%", ha="center", va="bottom", fontsize=9)
+plt.tight_layout(); plt.savefig(FIG_DIR / "09_anciennete.png", bbox_inches="tight", facecolor="white"); plt.show()
+
+
+# %% [markdown]
+# # 11. Synthèse pour la direction — À COMPLÉTER après exécution
 #
 # | Hypothèse | Question | Chiffre clé (à remplir) | Verdict |
 # |-----------|----------|--------------------------|---------|
@@ -508,8 +647,9 @@ print(f"Clients déclassés repassant MA avant la fin de la fenêtre : {rec_rate
 # | HC | Falaise ou érosion ? | Chute avoirs k=0 vs pente k−3→0 | |
 # | HD | Effet frontalier ? | Taux frontalier ___% vs résident ___% | |
 # | HE | Effet profil ? | Profil le plus exposé : ___ | |
-# | HF | Saisonnalité ? | Mois de pic : ___ | |
-# | HG | Réversibilité ? | Retour MA : ___% | |
+# | HF | Saisonnalité / dynamique ? | Mois de pic : ___ | sortie > entrée MA ? ___ |
+# | HG | Réversibilité par cause ? | Retour MA — Flux ___% vs Avoirs ___% | |
+# | HH | Ancienneté protège ? | Taux 1-3 mois ___% vs 13+ ___% ; corr ___ | |
 #
 # **Grilles de lecture :**
 # - Si **Avoirs** domine → cibler la rétention d'actifs (épargne/placement) des clients proches du seuil.
