@@ -3,12 +3,14 @@
 # ║  Données : périodes 371 → 389 (371–376 = lookback flux ; 377–389 analysé). ║
 # ║  Panel long : 1 ligne par (client × période).                              ║
 # ║                                                                            ║
-# ║  Règles métier (logique OU) :                                              ║
-# ║    • Un client reste Mass Affluent (MA) si  avoirs ≥ 62 000 €  OU          ║
-# ║      flux entrant ≥ 6 000 € pour CHACUN des 6 derniers mois.               ║
+# ║  Règles métier :                                                           ║
+# ║    • Un client est Mass Affluent (MA) si                                    ║
+# ║        (avoirs ≥ 62 000 €  OU  flux ≥ 6 000 € sur CHACUN des 6 mois)        ║
+# ║        ET  Actif sur les 3 derniers mois (flag Active_3M = Y).              ║
+# ║    • L'activité est une condition NÉCESSAIRE en plus du financier.          ║
 # ║    • Déclassement = MA au mois t, puis non-MA au mois t+1 (consécutifs).   ║
-# ║    • Cause = le(s) test(s) qui soutenai(en)t le statut à t et qui          ║
-# ║      casse(nt) à t+1.                                                       ║
+# ║    • Cause = le(s) critère(s) qui soutenai(en)t le statut à t et qui        ║
+# ║      casse(nt) à t+1 (avoirs / flux / activité).                            ║
 # ║                                                                            ║
 # ║  Script auto-porté : à coller dans un notebook. Il suppose qu'un           ║
 # ║  DataFrame `df` est déjà chargé (cf. cellule 0 pour le format attendu).    ║
@@ -47,7 +49,8 @@ plt.rcParams.update({"figure.figsize": (12, 5.5), "axes.grid": True,
                      "grid.alpha": 0.25, "figure.dpi": 110,
                      "axes.titlesize": 13, "axes.labelsize": 11})
 COL = {"avoirs": "#06B6D4", "flux": "#F59E0B", "both": "#7C3AED",
-       "anom": "#94A3B8", "accent": "#EC4899", "dark": "#334155"}
+       "anom": "#94A3B8", "accent": "#EC4899", "dark": "#334155",
+       "active": "#10B981", "mix": "#EF4444"}   # activité (vert) / financier+activité (rouge)
 
 
 def idx_to_ym(idx):
@@ -124,6 +127,36 @@ print(f"Lignes : {len(data):,} | Clients : {data['id'].nunique():,} | "
       f"({idx_to_ym(data['periode'].min())} → {idx_to_ym(data['periode'].max())})")
 print(f"Frontalier dispo : {HAS_FRONT} | Profil (segment amélioré) dispo : {HAS_PROFIL}")
 
+# ── Flag d'activité (Active 3M) — DataFrame séparé `activity` ─────────────────
+# Attendu : colonnes id / période / 'Active 3 M' (valeurs 'Y'/'N'). Fusion sur
+# (id, période). Flag manquant après fusion = INCONNU (n'entre pas dans la cause
+# « Activité »). L'activité est une condition NÉCESSAIRE de l'éligibilité MA.
+CANON_ACT = {
+    "identifiant_tiers": "id", "id": "id", "client_id": "id", "client": "id",
+    "periode": "periode", "period": "periode", "period_number": "periode",
+    "numero_periode": "periode", "num_periode": "periode", "no_periode": "periode",
+    "active_3_m": "active", "active_3m": "active", "actif_3_m": "active",
+    "actif_3m": "active", "flag_active_3_m": "active", "flag_actif_3m": "active",
+    "active_3_months": "active", "active3m": "active",
+}
+try:
+    _act = activity.rename(columns={c: CANON_ACT[_norm(c)]
+                                    for c in activity.columns if _norm(c) in CANON_ACT}).copy()
+    assert {"id", "periode", "active"} <= set(_act.columns), \
+        f"Colonnes activité manquantes : {{'id','periode','active'}} - {set(_act.columns)}"
+    _act["periode"] = pd.to_numeric(_act["periode"], errors="coerce").astype("Int64")
+    _act["active"]  = _act["active"].astype(str).str.strip().str.upper().map({"Y": True, "N": False})
+    _act = _act.dropna(subset=["id", "periode"]).drop_duplicates(["id", "periode"])
+    _act["periode"] = _act["periode"].astype(int)
+    data = data.merge(_act[["id", "periode", "active"]], on=["id", "periode"], how="left")
+    HAS_ACTIVE = True
+    _cov = data["active"].notna().mean() * 100
+    print(f"Flag activité fusionné : couverture {_cov:.1f}% des lignes | "
+          f"actifs {(data['active'] == True).mean()*100:.1f}% / inactifs {(data['active'] == False).mean()*100:.1f}%")
+except NameError:
+    HAS_ACTIVE = False
+    print("⚠ DataFrame `activity` introuvable — analyse sans le critère d'activité.")
+
 
 # %% [markdown]
 # # 1. Hygiène du panel & prévalence Mass Affluent
@@ -139,6 +172,8 @@ avoirs_wide = data.pivot_table(index="id", columns="periode", values="avoirs", a
 inflow_wide = data.pivot_table(index="id", columns="periode", values="inflow", aggfunc="first")
 front_wide  = data.pivot_table(index="id", columns="periode", values="frontalier", aggfunc="first") if HAS_FRONT else None
 profil_wide = data.pivot_table(index="id", columns="periode", values="profil", aggfunc="first") if HAS_PROFIL else None
+# Flag activité déjà pré-calculé (Active 3M) : True / False / NaN (inconnu), pas de fenêtre à recalculer
+active_wide = data.pivot_table(index="id", columns="periode", values="active", aggfunc="first") if HAS_ACTIVE else None
 periods = sorted(seg_wide.columns)
 
 obs_per_client = seg_wide.notna().sum(axis=1)
@@ -221,6 +256,7 @@ for p in periods:
         "avoirs_pass_t": _lookup(avoirs_pass_wide, ids, p), "avoirs_pass_d": _lookup(avoirs_pass_wide, ids, nxt),
         "inflow_pass_t": _lookup(inflow_pass_wide, ids, p), "inflow_pass_d": _lookup(inflow_pass_wide, ids, nxt),
         "qual_t": _lookup(qualcount_wide, ids, p),  "qual_d": _lookup(qualcount_wide, ids, nxt),
+        "active_pass_t": _lookup(active_wide, ids, p), "active_pass_d": _lookup(active_wide, ids, nxt),
         "frontalier": _lookup(front_wide, ids, nxt),
         "profil": _lookup(profil_wide, ids, nxt),
     }))
@@ -240,14 +276,18 @@ print(dg["target_segment"].value_counts().to_string())
 # %% [markdown]
 # # 4. ★ Attribution de la cause (cœur de l'analyse)
 #
-# Logique OU : un déclassement « propre » suppose que **les deux** tests échouent
-# à t+1. Le **déclencheur** est le test qui soutenait encore le statut à t et qui
-# casse à t+1 :
-# - **Avoirs** : les avoirs passent sous 62k (le flux ne soutenait déjà pas / pas non plus).
-# - **Flux** : rupture de la série de 6 mois ≥ 6k.
-# - **Les deux** : les deux soutiens cèdent le même mois.
-# - **Anomalie** : la règle dirait encore MA → lag d'application ou autre critère banque.
-# - **Indéterminé** : fenêtre flux incomplète (déclassement avant p382).
+# Règle **(avoirs ≥ 62k OU flux 6 mois) ET activité**. Le **déclencheur** est le(s)
+# critère(s) qui soutenai(en)t le statut à t et qui casse(nt) à t+1 :
+# - **Avoirs** : les avoirs passent sous 62k (financier, l'activité tient).
+# - **Flux** : rupture de la série de 6 mois ≥ 6k (financier, l'activité tient).
+# - **Les deux (fin)** : avoirs ET flux cèdent (activité intacte).
+# - **Activité** : le client devient inactif (Active_3M passe à N), financier intact.
+# - **Financier + Activité** : un soutien financier ET l'activité cassent le même mois.
+# - **Anomalie** : la règle dirait encore MA → lag d'application ou autre critère.
+# - **Indéterminé** : flux hors fenêtre OU flag d'activité manquant.
+#
+# ⚠️ L'ajout de l'activité doit faire **fondre les anomalies** : beaucoup de clients
+# « financièrement encore MA » mais déclassés le sont en fait parce qu'ils sont devenus inactifs.
 
 # %%
 def _status(a, i):
@@ -261,29 +301,54 @@ def _status(a, i):
 def _trigger(r):
     lost_av = bool(r.avoirs_pass_t) and not bool(r.avoirs_pass_d)
     it, idd = r.inflow_pass_t, r.inflow_pass_d
-    if pd.isna(it) or pd.isna(idd):
-        return "Avoirs (flux indéterminé)" if lost_av else "Indéterminé (fenêtre flux)"
-    lost_fx = (it == 1) and (idd != 1)
-    if lost_av and lost_fx: return "Les deux"
-    if lost_av:             return "Avoirs"
-    if lost_fx:             return "Flux"
-    return "Anomalie (règle dit encore MA)"
+    fin_indet = pd.isna(it) or pd.isna(idd)
+    lost_fx = (not fin_indet) and (it == 1) and (idd != 1)
+    if HAS_ACTIVE:                                          # activité = condition nécessaire
+        at, ad = r.active_pass_t, r.active_pass_d
+        act_indet = pd.isna(at) or pd.isna(ad)
+        lost_ac = (not act_indet) and bool(at) and (not bool(ad))   # était actif, devient inactif
+    else:
+        act_indet, lost_ac = False, False
+    fin_broken = lost_av or lost_fx
+    if not (fin_broken or lost_ac):
+        return "Indéterminé" if (fin_indet or act_indet) else "Anomalie (règle dit encore MA)"
+    if fin_broken and lost_ac:  return "Financier + Activité"
+    if lost_ac:                 return "Activité"
+    if lost_av and lost_fx:     return "Les deux (fin)"
+    if lost_av:                 return "Avoirs"
+    return "Flux"
 
 dg["statut_t"]  = [_status(a, i) for a, i in zip(dg.avoirs_pass_t, dg.inflow_pass_t)]
 dg["statut_d"]  = [_status(a, i) for a, i in zip(dg.avoirs_pass_d, dg.inflow_pass_d)]
 dg["trigger"]   = dg.apply(_trigger, axis=1)
 dg["avoirs_ko_d"] = ~dg.avoirs_pass_d.astype(bool)
 dg["flux_ko_d"]   = dg.inflow_pass_d.ne(1)              # NaN -> True (inconnu compté comme non-passant)
+if HAS_ACTIVE:
+    dg["active_ko_d"] = dg["active_pass_d"] == False    # inactif connu à t+1
 
 trig = dg["trigger"].value_counts()
 print("Déclencheur du déclassement (tous événements) :")
 for k, v in trig.items():
     print(f"  {k:<34} {v:>6,}  ({v/len(dg)*100:4.1f}%)")
 
-print("\nÀ t+1 (état des tests, indépendamment du déclencheur) :")
+print("\nÀ t+1 (état des critères, indépendamment du déclencheur) :")
 print(f"  Avoirs < 62k                       : {dg['avoirs_ko_d'].mean()*100:4.1f}%")
 print(f"  Test flux non satisfait            : {dg['flux_ko_d'].mean()*100:4.1f}%")
-print(f"  Les deux KO simultanément          : {(dg['avoirs_ko_d'] & dg['flux_ko_d']).mean()*100:4.1f}%")
+print(f"  Les deux (fin) KO simultanément    : {(dg['avoirs_ko_d'] & dg['flux_ko_d']).mean()*100:4.1f}%")
+if HAS_ACTIVE:
+    print(f"  Inactif (Active_3M = N)            : {dg['active_ko_d'].mean()*100:4.1f}%")
+
+# ── ★ Test du facteur ACTIVITÉ : explique-t-il les anciennes « anomalies » ? ──
+if HAS_ACTIVE:
+    fin_ok_d = dg["avoirs_pass_d"].astype(bool) | dg["inflow_pass_d"].eq(1)
+    amo = dg[fin_ok_d]
+    print("\n★ FACTEUR ACTIVITÉ")
+    print(f"  Déclassés ENCORE éligibles financièrement (avoirs OU flux OK à t+1) : {len(amo):,}")
+    if len(amo):
+        print(f"    … dont INACTIFS (Active_3M = N) : {(amo['active_pass_d'] == False).mean()*100:4.1f}%"
+              f"  → expliqués par l'activité")
+    share_act = dg["trigger"].isin(["Activité", "Financier + Activité"]).mean() * 100
+    print(f"  Déclassements déclenchés par l'activité (seule ou combinée) : {share_act:.1f}% du total")
 
 ct = pd.crosstab(dg["statut_t"], dg["statut_d"])
 print("\nTable de transition  statut@t (lignes)  ×  statut@t+1 (colonnes) :")
@@ -320,11 +385,13 @@ if len(flux_dg):
               f"part 40–62k : {((cush >= 40_000) & (cush < AVOIRS_MIN)).mean()*100:.1f}%")
 
 # ── Figure : déclencheurs (barres) + segment cible (camembert) ───────────────
-order = ["Avoirs", "Flux", "Les deux", "Avoirs (flux indéterminé)",
-         "Indéterminé (fenêtre flux)", "Anomalie (règle dit encore MA)"]
-cmap = {"Avoirs": COL["avoirs"], "Flux": COL["flux"], "Les deux": COL["both"],
-        "Avoirs (flux indéterminé)": COL["avoirs"], "Indéterminé (fenêtre flux)": COL["anom"],
-        "Anomalie (règle dit encore MA)": COL["anom"]}
+# Ordre & couleurs partagés par toutes les sections (7, 8, 9).
+TRIGGER_ORDER = ["Avoirs", "Flux", "Les deux (fin)", "Activité",
+                 "Financier + Activité", "Anomalie (règle dit encore MA)", "Indéterminé"]
+cmap = {"Avoirs": COL["avoirs"], "Flux": COL["flux"], "Les deux (fin)": COL["both"],
+        "Activité": COL["active"], "Financier + Activité": COL["mix"],
+        "Anomalie (règle dit encore MA)": COL["anom"], "Indéterminé": "#CBD5E1"}
+order = TRIGGER_ORDER
 # Figure basée sur la fenêtre flux complète (vue nette)
 trig_o = trig_clean.reindex([o for o in order if o in trig_clean.index])
 den = max(len(dg_clean), 1)
@@ -463,9 +530,8 @@ if HAS_FRONT:
 
 # ── Barres « taux de déclassement » ventilées par cause ──────────────────────
 # Longueur totale = taux du groupe ; découpage = part de chaque déclencheur.
-CAUSES = ["Avoirs", "Flux", "Les deux", "Anomalie (règle dit encore MA)"]
-cause_cols = {"Avoirs": COL["avoirs"], "Flux": COL["flux"],
-              "Les deux": COL["both"], "Anomalie (règle dit encore MA)": COL["anom"]}
+CAUSES = TRIGGER_ORDER                                   # inclut Activité + combos
+cause_cols = {c: cmap.get(c, COL["dark"]) for c in CAUSES}
 
 def rate_stacked_by_cause(col, top=10):
     denom = risk.groupby(risk[col].astype(str))["down"].agg(n="size", d="sum")
@@ -642,7 +708,8 @@ plt.tight_layout(); plt.savefig(FIG_DIR / "09_anciennete.png", bbox_inches="tigh
 #
 # | Hypothèse | Question | Chiffre clé (à remplir) | Verdict |
 # |-----------|----------|--------------------------|---------|
-# | HA | Quel déclencheur domine ? | Avoirs ___% vs Flux ___% vs Les deux ___% | |
+# | HA | Quel déclencheur domine ? | Avoirs ___% vs Flux ___% vs Activité ___% | |
+# | HI | Activité = facteur clé ? | Déclassés fin. éligibles inactifs : ___% ; part activité ___% | |
 # | HB | Statut fragile ? | Borderline 62–70k : ___% | |
 # | HC | Falaise ou érosion ? | Chute avoirs k=0 vs pente k−3→0 | |
 # | HD | Effet frontalier ? | Taux frontalier ___% vs résident ___% | |
@@ -656,7 +723,10 @@ plt.tight_layout(); plt.savefig(FIG_DIR / "09_anciennete.png", bbox_inches="tigh
 # - Si **Flux** domine → enjeu de domiciliation des revenus ; frontaliers à surveiller.
 # - Forte part **borderline** + fort **retour MA** → la frontière 62k génère du bruit ;
 #   envisager un lissage (moyenne 3 mois) du critère côté banque.
-# - Part d'**anomalies** élevée → écart entre la règle théorique et l'application réelle
+# - Si l'ajout du critère **activité** fait fondre les anomalies → l'inactivité est le vrai
+#   mécanisme derrière les clients « financièrement MA mais classés Retail » : cibler la
+#   réactivation (relance transactionnelle) plutôt que le seul financier.
+# - Part d'**anomalies** encore élevée MALGRÉ l'activité → écart règle/application réelle
 #   (lags, critères additionnels) : à clarifier avec les équipes métier.
 #
 # > Lance le script sur tes données et partage-moi les sorties : on remplit ce
