@@ -1,25 +1,101 @@
-# ── DIAGNOSTIC CHURN — a coller dans une cellule APRES la cellule "Churn CORRIGE" ──
-# (celle qui definit last_obs, coh, obs_end, still_here, churned, churn_tenure, potential_window)
+import pandas as pd
 
-DATA_MAX = int(pd.concat([flux["periode"], stock["periode"]]).max())
-print("Bord de donnees GLOBAL (max periode) :", DATA_MAX, "\n")
+horizons = [12, 24, 36, 48]
 
-print("obs_end (max last_obs) PAR COHORTE :")
-print(obs_end.groupby(coh).first().to_string(), "\n")
+# Remove accidental duplicate client-period rows
+df = (
+    test[
+        ["identifiant_tiers", "periode", "acq_period", "annee_acquisition"]
+    ]
+    .drop_duplicates(["identifiant_tiers", "periode"])
+    .copy()
+)
 
-print("Distribution de last_obs DANS chaque cohorte (les actifs doivent toucher le bord) :")
-print(last_obs.groupby(coh).agg(["min", "median", "max", "count"]).to_string(), "\n")
+# Last available period in the full dataset
+data_max_period = df["periode"].max()
 
-# Zoom sur 2018 (le plus de recul) et 2022 (bord a Y+4) au horizon Y+4
-for c, X in [(2018, 48), (2022, 48)]:
-    idx = cli.index[(cli["cohorte"] == c) & (potential_window.reindex(cli.index) >= X - 1)]
-    oe  = obs_end.reindex(idx)
-    lo  = last_obs.reindex(idx)
-    print(f"--- Cohorte {c}, Y+4 (X={X}) ---")
-    print(f"  n eligibles      : {len(idx)}")
-    print(f"  still_here (%)    : {still_here.reindex(idx).mean()*100:.1f}")
-    print(f"  churned (%)       : {churned.reindex(idx).mean()*100:.1f}")
-    print(f"  obs_end cohorte   : {oe.iloc[0] if len(oe) else 'NA'}")
-    print(f"  last_obs des elig : min={lo.min()}, max={lo.max()}, "
-          f"% qui touchent le bord (>=obs_end-1) : {(lo >= oe-1).mean()*100:.1f}")
-    print(f"  acq des elig      : min={acq.reindex(idx).min()}, max={acq.reindex(idx).max()}\n")
+# One row per client
+clients = (
+    df.groupby("identifiant_tiers", as_index=False)
+      .agg(
+          annee_acquisition=("annee_acquisition", "first"),
+          acq_period=("acq_period", "first"),
+          last_period=("periode", "max")
+      )
+)
+
+results = []
+
+for h in horizons:
+    evaluation_period = clients["acq_period"] + h
+
+    # Only include clients for whom the dataset reaches this horizon
+    observable = evaluation_period <= data_max_period
+
+    temp = clients.loc[observable].copy()
+
+    # Cumulative churn:
+    # client is absent before reaching acquisition period + h
+    temp["churned"] = temp["last_period"] < (
+        temp["acq_period"] + h
+    )
+
+    cohort_result = (
+        temp.groupby("annee_acquisition")
+            .agg(
+                observable_clients=("identifiant_tiers", "nunique"),
+                churned_clients=("churned", "sum")
+            )
+            .reset_index()
+    )
+
+    cohort_result["horizon_months"] = h
+    cohort_result["churn_rate"] = (
+        cohort_result["churned_clients"]
+        / cohort_result["observable_clients"]
+    )
+
+    results.append(cohort_result)
+
+churn_by_cohort = pd.concat(results, ignore_index=True)
+
+
+
+
+xxxxxx
+
+
+churn_counts = churn_by_cohort.pivot(
+    index="annee_acquisition",
+    columns="horizon_months",
+    values="churned_clients"
+).rename(columns={
+    12: "churned_after_1_year",
+    24: "churned_after_2_years",
+    36: "churned_after_3_years",
+    48: "churned_after_4_years"
+})
+
+churn_counts
+
+
+
+
+xxxxxxxxxxx
+
+
+
+churn_rates = churn_by_cohort.pivot(
+    index="annee_acquisition",
+    columns="horizon_months",
+    values="churn_rate"
+).rename(columns={
+    12: "churn_rate_1_year",
+    24: "churn_rate_2_years",
+    36: "churn_rate_3_years",
+    48: "churn_rate_4_years"
+})
+
+churn_rates
+
+
