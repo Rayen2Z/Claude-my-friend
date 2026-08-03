@@ -6,12 +6,10 @@
 #     • upgrade   = Mass retail / MR a potentiel  ->  Mass Affluent
 #     • downgrade = Mass Affluent  ->  Mass retail / MR a potentiel
 #  Cela EXCLUT de fait les acquisitions (statut d'origine = NaN) et le
-#  downstream banque privee (statut d'origine hors retail). Resultat : le NET
-#  DELTA organique upgrade - downgrade, celui qui nous interesse.
+#  downstream banque privee (statut d'origine hors retail).
 #
 #  A coller dans une cellule APRES la construction de seg_wide.
-#  Prerequis dans le kernel : seg_wide, periods, ANALYSIS_START, MA_LABEL,
-#  idx_to_ym, COL, FIG_DIR.
+#  Prerequis : seg_wide, periods, ANALYSIS_START, MA_LABEL, idx_to_ym, COL, FIG_DIR.
 # ══════════════════════════════════════════════════════════════════════════
 import numpy as np, pandas as pd, matplotlib.pyplot as plt
 
@@ -28,9 +26,9 @@ for p in periods:
     rows.append({"periode": p, "upgrade": int(up.sum()), "downgrade": int(down.sum())})
 
 bal = pd.DataFrame(rows)
-bal = bal[bal["periode"] >= ANALYSIS_START].copy()          # fenetre analysee
-bal["net"]     = bal["upgrade"] - bal["downgrade"]          # ★ net delta organique
-bal["net_cum"] = bal["net"].cumsum()                        # deficit cumule
+bal = bal[bal["periode"] >= ANALYSIS_START].copy()
+bal["net"]     = bal["upgrade"] - bal["downgrade"]
+bal["net_cum"] = bal["net"].cumsum()
 bal["mois"]    = bal["periode"].map(idx_to_ym)
 
 U, D = int(bal["upgrade"].sum()), int(bal["downgrade"].sum())
@@ -41,25 +39,69 @@ print(f"Total downgrades    : {D:,}   (a rapprocher des 14 248 declassements de 
 print(f"NET DELTA organique : {U - D:+,}   | ratio upgrade/downgrade = {U / max(D, 1):.2f}")
 print(f"Mois a solde negatif : {(bal['net'] < 0).sum()} / {len(bal)}")
 
-# ── Graphe : upgrade (haut) vs downgrade (bas) + net ; deficit cumule dessous ──
-fig, ax = plt.subplots(2, 1, figsize=(13, 8), sharex=True,
-                       gridspec_kw={"height_ratios": [2, 1]})
-x = np.arange(len(bal))
-ax[0].bar(x,  bal["upgrade"],   color=COL["active"], label="Upgrade (retail -> MA)")
-ax[0].bar(x, -bal["downgrade"], color=COL["mix"],    label="Downgrade (MA -> retail)")
-ax[0].plot(x, bal["net"], color=COL["dark"], marker="o", lw=2, label="Net mensuel (upgrade - downgrade)")
-ax[0].axhline(0, color="#94A3B8", lw=1)
-ax[0].set_ylabel("Nb de clients / mois")
-ax[0].set_title(f"Balance organique upgrade <-> downgrade — net {U - D:+,} sur la periode "
-                f"(clients existants, hors acquisition & banque privee)")
-ax[0].legend(fontsize=9, loc="upper left")
 
-ax[1].fill_between(x, bal["net_cum"], 0, color=COL["accent"], alpha=0.25)
-ax[1].plot(x, bal["net_cum"], color=COL["accent"], lw=2, marker="s", ms=4)
+# ══════════════════════════════════════════════════════════════════════════
+#  ★ CHECK DECISIF — UPGRADE : NOUVELLE PROMOTION vs RETOUR (revolving door)
+#
+#  Le net brut est gonfle par les RETOURS : ~31% des declasses reviennent MA
+#  (§9) et sont recomptes en "upgrade". On isole les VRAIES nouvelles promotions
+#  (client JAMAIS MA auparavant) pour obtenir le net organique reel.
+#     net_first = nouvelles promotions - downgrades   <-- l'indicateur qui compte
+# ══════════════════════════════════════════════════════════════════════════
+ma_bool  = (seg_wide == MA)
+first_ma = pd.Series(np.nan, index=seg_wide.index)          # 1re periode MA observee / client
+for p in seg_wide.columns:
+    m = ma_bool[p] & first_ma.isna()
+    first_ma[m] = p
+
+rows = []
+for p in periods:
+    if p + 1 not in seg_wide.columns:
+        continue
+    a, b = seg_wide[p], seg_wide[p + 1]
+    up   = a.isin(RETAIL_LOWER) & (b == MA)
+    down = (a == MA) & b.isin(RETAIL_LOWER)
+    rows.append({
+        "periode":   p,
+        "up_first":  int((up & (first_ma == p + 1)).sum()),  # jamais MA avant = vraie promotion
+        "up_return": int((up & (first_ma <  p + 1)).sum()),  # deja MA avant  = revolving door
+        "downgrade": int(down.sum()),
+    })
+d2 = pd.DataFrame(rows)
+d2 = d2[d2["periode"] >= ANALYSIS_START].copy()
+d2["net_first"] = d2["up_first"] - d2["downgrade"]           # ★ net des NOUVELLES promotions
+d2["net_brut"]  = d2["up_first"] + d2["up_return"] - d2["downgrade"]
+d2["mois"]      = d2["periode"].map(idx_to_ym)
+
+F, R, Dd = int(d2["up_first"].sum()), int(d2["up_return"].sum()), int(d2["downgrade"].sum())
+print("\nUpgrade decompose : nouvelle promotion vs retour")
+print(d2[["mois", "up_first", "up_return", "downgrade", "net_first", "net_brut"]].to_string(index=False))
+print(f"\nNouvelles promotions (jamais MA avant) : {F:,}")
+print(f"Retours (revolving door)               : {R:,}")
+print(f"Downgrades                             : {Dd:,}")
+print(f"NET nouvelles promotions : {F - Dd:+,}   <-- indicateur organique REEL")
+print(f"NET brut (avec retours)  : {F + R - Dd:+,}")
+
+# ── Graphes ────────────────────────────────────────────────────────────────
+fig, ax = plt.subplots(2, 1, figsize=(13, 9), sharex=True,
+                       gridspec_kw={"height_ratios": [1, 1]})
+x = np.arange(len(bal))
+ax[0].bar(x,  bal["upgrade"],   color=COL["active"], label="Upgrade brut (retail -> MA)")
+ax[0].bar(x, -bal["downgrade"], color=COL["mix"],    label="Downgrade (MA -> retail)")
+ax[0].plot(x, bal["net"], color=COL["dark"], marker="o", lw=2, label="Net brut")
+ax[0].axhline(0, color="#94A3B8", lw=1)
+ax[0].set_ylabel("Nb clients / mois"); ax[0].legend(fontsize=8, loc="upper left")
+ax[0].set_title(f"Brut : net {U - D:+,} (gonfle par les retours)")
+
+xf = np.arange(len(d2))
+ax[1].bar(xf, d2["up_first"],  color=COL["active"], label="Nouvelle promotion (jamais MA)")
+ax[1].bar(xf, d2["up_return"], bottom=d2["up_first"], color=COL["avoirs"], label="Retour (revolving door)")
+ax[1].bar(xf, -d2["downgrade"], color=COL["mix"], label="Downgrade")
+ax[1].plot(xf, d2["net_first"], color=COL["dark"], marker="o", lw=2, label="Net NOUVELLES promotions")
 ax[1].axhline(0, color="#94A3B8", lw=1)
-ax[1].set_ylabel("Net cumule")
-ax[1].set_title("Deficit organique cumule sur la fenetre")
-ax[1].set_xticks(x); ax[1].set_xticklabels(bal["mois"], rotation=45, ha="right")
+ax[1].set_ylabel("Nb clients / mois"); ax[1].legend(fontsize=8, loc="upper left", ncol=2)
+ax[1].set_title(f"Net reel des nouvelles promotions : {F - Dd:+,}")
+ax[1].set_xticks(xf); ax[1].set_xticklabels(d2["mois"], rotation=45, ha="right")
 
 plt.tight_layout()
 plt.savefig(FIG_DIR / "11_balance_upgrade_downgrade.png", bbox_inches="tight", facecolor="white")
