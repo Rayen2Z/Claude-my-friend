@@ -1,0 +1,222 @@
+╔══════════════════════════════════════════════════════════════════════════╗
+║  SCRIPT DE PRÉSENTATION — DÉCLASSEMENT MASS AFFLUENT                        ║
+║  Public : managers + équipe   ·   Durée cible : ~20–25 min                  ║
+║  Fil rouge : « La part de MA monte… mais c'est un trompe-l'œil. »           ║
+╚══════════════════════════════════════════════════════════════════════════╝
+
+Note : ce script est une trame parlée, pas un texte à lire mot pour mot.
+Chaque slide a un « MESSAGE CLÉ » (la seule chose à faire passer) puis une
+narration possible. Les chiffres en gras sont ceux à citer à voix haute.
+
+
+────────────────────────────────────────────────────────────────────────────
+SLIDE 1 — Couverture : Déclassement Mass Affluent
+────────────────────────────────────────────────────────────────────────────
+MESSAGE CLÉ : on m'a demandé si on perd des MA plus vite qu'on n'en gagne ; la
+réponse est nuancée, et c'est ça l'intérêt.
+
+« Bonjour à tous. Le point de départ, c'est une inquiétude de la direction :
+est-ce qu'on déclasse plus de Mass Affluent qu'on n'en gagne ? La réponse
+courte : la PART de MA monte — de 24,7 % à 26,2 % du portefeuille. Mais quand
+on regarde sous le capot, les promotions organiques sont déficitaires : moins
+4 123. Je vais vous montrer comment on concilie ces deux chiffres. »
+
+
+────────────────────────────────────────────────────────────────────────────
+SLIDE 2 — Le constat & la méthode (+ rappel de la règle)
+────────────────────────────────────────────────────────────────────────────
+MESSAGE CLÉ : deux lentilles (d'où vient la croissance / pourquoi ils sortent),
+et un rappel de la règle — surtout le « 6 mois consécutifs » du flux.
+
+« Deux lentilles. La première : d'où vient la croissance ? On regarde chaque
+changement de statut, mois par mois, en séparant les VRAIES nouvelles
+promotions des simples retours. La deuxième : pourquoi les clients sortent —
+quel critère de la règle casse.
+Rappel de la règle, en bas : pour être Mass Affluent il faut être actif au
+moins 3 mois, ET soit 62 000 € d'avoirs, soit 6 000 € de flux entrants sur
+6 mois CONSÉCUTIFS. Retenez ce "6 mois consécutifs", on y reviendra à la fin.
+Et le chiffre qui résume tout : 8 842 vraies promotions contre 12 965
+déclassements — solde organique moins 4 123. »
+
+
+────────────────────────────────────────────────────────────────────────────
+SLIDE 3 — Acte I : La croissance en trompe-l'œil (intercalaire)
+────────────────────────────────────────────────────────────────────────────
+« Commençons par la croissance — et pourquoi elle est trompeuse. »
+
+
+────────────────────────────────────────────────────────────────────────────
+SLIDE 4 — Croissance brute vs promotions nettes
+────────────────────────────────────────────────────────────────────────────
+MESSAGE CLÉ : +2 380 en brut, mais −4 123 en vraies promotions ; l'écart, ce
+sont les retours (revolving door) + acquisitions + downstream privé.
+
+« Voilà le paradoxe. Si on compte tout, le portefeuille gagne 2 380 MA nets —
+d'où la part qui monte. Mais ce +2 380 est gonflé par 6 503 RETOURS : des
+clients qu'on avait déclassés et qui reviennent. Si je ne garde que les vraies
+nouvelles promotions, je tombe à moins 4 123. Autrement dit : on déclasse
+13 000 clients pour n'en promouvoir réellement que 9 000. La croissance ne
+tient que par les acquisitions, le downstream de la banque privée, et cette
+porte tournante. C'est un trompe-l'œil. »
+
+
+────────────────────────────────────────────────────────────────────────────
+SLIDE 5 — Acte II : Pourquoi ils sortent (intercalaire)
+────────────────────────────────────────────────────────────────────────────
+« Alors, pourquoi ces clients sortent-ils ? »
+
+
+────────────────────────────────────────────────────────────────────────────
+SLIDE 6 — Le déclencheur du déclassement
+────────────────────────────────────────────────────────────────────────────
+MESSAGE CLÉ : le flux domine (50 %), avoirs 25 %, activité 19 %.
+
+« Quand un client perd son statut, quel critère a cassé ? Le flux domine, et de
+loin : la MOITIÉ des déclassements viennent d'une rupture de la série de flux.
+Les avoirs sous 62 000 € pèsent un quart. L'inactivité, un cinquième. Donc
+c'est d'abord un problème de flux entrants. »
+
+
+────────────────────────────────────────────────────────────────────────────
+SLIDE 7 — Le piège de l'activité
+────────────────────────────────────────────────────────────────────────────
+MESSAGE CLÉ : 2 955 déclassés étaient encore éligibles financièrement, et 100 %
+d'entre eux étaient inactifs → une partie des sorties est réparable par relance.
+
+« Un point important. On a 2 955 déclassés qui étaient ENCORE éligibles
+financièrement — ils avaient les avoirs ou les flux. Et pourtant ils sortent.
+Pourquoi ? Parce que 100 % d'entre eux étaient devenus inactifs. L'activité,
+c'est le critère qu'on oublie : un client peut avoir l'argent et sortir quand
+même s'il ne bouge plus. Donc une partie des sorties n'est pas une perte de
+patrimoine — c'est une mise en sommeil, et ça, une relance peut le réparer. »
+
+
+────────────────────────────────────────────────────────────────────────────
+SLIDE 8 — Fragilité : étaient-ils « à peine » MA ?
+────────────────────────────────────────────────────────────────────────────
+MESSAGE CLÉ : avoirs médians au dernier mois MA = 51 787 € (déjà sous 62 k) ;
+16 % borderline → beaucoup de bruit de frontière.
+
+« Étaient-ils vraiment "aisés" au moment de sortir ? Pas tant que ça. Les
+avoirs médians au dernier mois MA sont de 51 800 € — déjà SOUS le seuil de
+62 000. La moitié tenaient leur statut par le flux, pas par les avoirs. Et 16 %
+stationnaient juste au-dessus de la ligne, entre 62 et 70 000. Beaucoup de ces
+sorties, c'est du bruit de frontière : des gens au ras du seuil qui basculent
+au moindre mouvement. »
+
+
+────────────────────────────────────────────────────────────────────────────
+SLIDE 9 — Falaise ou érosion ?
+────────────────────────────────────────────────────────────────────────────
+MESSAGE CLÉ : chute brutale de 51,8 k€ à 32,4 k€ au mois du déclassement
+(−37 %) → falaise, donc pas de signal d'alerte, prévention structurelle.
+
+« Est-ce que ça se dégrade lentement, ou d'un coup ? D'un coup. Les avoirs
+montent tranquillement jusqu'au mois d'avant — 51 800 € — puis s'effondrent à
+32 400 € le mois du déclassement. Moins 37 % en un mois. C'est une falaise, pas
+une érosion. Conséquence : quasiment pas de signal d'alerte progressif, donc la
+prévention doit être structurelle, pas réactive. »
+
+
+────────────────────────────────────────────────────────────────────────────
+SLIDE 10 — Qui est le plus exposé ?
+────────────────────────────────────────────────────────────────────────────
+MESSAGE CLÉ : frontaliers 3,43 % vs résidents 2,70 % ; jeunes profils les plus
+volatils ; fonctionnaires les plus stables.
+
+« Le risque n'est pas uniforme. Les frontaliers se déclassent plus que les
+résidents — 3,4 contre 2,7 % — logique, leur salaire est domicilié à
+l'étranger, donc le flux est plus fragile. Côté profils, ce sont les jeunes —
+juniors, étudiants, jeunes actifs — les plus volatils. Les fonctionnaires, à
+l'inverse, sont les plus stables. »
+
+
+────────────────────────────────────────────────────────────────────────────
+SLIDE 11 — Acte III : Une porte tournante (intercalaire)
+────────────────────────────────────────────────────────────────────────────
+« Dernière partie, et la plus importante pour l'action : est-ce une vraie
+perte, ou une porte tournante ? »
+
+
+────────────────────────────────────────────────────────────────────────────
+SLIDE 12 — Réversibilité — et pourquoi le flux enferme
+────────────────────────────────────────────────────────────────────────────
+MESSAGE CLÉ (LE point marquant) : 31 % reviennent, mais l'asymétrie de la règle
+enferme les sorties flux — retour 23,6 % (flux) vs 40,4 % (avoirs).
+
+« 31 % des déclassés repassent MA plus tard. Mais très inégalement — et c'est
+la règle elle-même qui pose problème. Un client qui sort pour ses AVOIRS peut
+se corriger dès le mois suivant : un versement, et il repasse au-dessus de
+62 000. Mais un client qui sort pour le FLUX doit reconstituer 6 mois
+CONSÉCUTIFS à 6 000 €. Un seul mauvais mois, et il est bloqué dehors 6 mois.
+Résultat : les sorties flux ne reviennent qu'à 23,6 %, contre 40,4 % pour les
+avoirs. La mécanique de la règle enferme les clients flux. »
+
+
+────────────────────────────────────────────────────────────────────────────
+SLIDE 13 — Ancienneté : une porte tournante de nouveaux MA
+────────────────────────────────────────────────────────────────────────────
+MESSAGE CLÉ : médiane 5 mois, 60 % sortent en 6 mois, 13,3 %/mois à 1–3 mois
+vs 1,1 % après un an → ce sont les nouveaux MA qui churnent.
+
+« Et qui sort ? Surtout des nouveaux. L'ancienneté médiane au moment du
+déclassement est de 5 mois — 60 % sortent dans les 6 premiers mois. Le taux
+mensuel est de 13 % pour les MA de 1 à 3 mois, et il tombe à 1 % après un an.
+C'est une porte tournante de MA fraîchement promus, encore instables au seuil.
+Une fois installés, les clients ne bougent plus. »
+
+
+────────────────────────────────────────────────────────────────────────────
+SLIDE 14 — Quatre enseignements
+────────────────────────────────────────────────────────────────────────────
+« Quatre choses à retenir. UN : la croissance MA est un trompe-l'œil — on
+déclasse plus qu'on ne promeut vraiment. DEUX : le flux est le déclencheur
+numéro un, et la règle des 6 mois le rend difficile à réparer. TROIS : c'est
+une porte tournante de nouveaux MA, au seuil. QUATRE : une bonne part de ces
+sorties, c'est du bruit de frontière, pas une vraie perte de valeur. »
+
+
+────────────────────────────────────────────────────────────────────────────
+SLIDE 15 — Recommandations (5 actions)
+────────────────────────────────────────────────────────────────────────────
+MESSAGE CLÉ : la n°1 (lisser la règle flux) est la plus impactante.
+
+« Cinq actions. La première, la plus impactante : LISSER la règle des flux.
+Aujourd'hui un seul mauvais mois enferme un client 6 mois ; une moyenne
+glissante réglerait la moitié des sorties. Deux : réactiver les inactifs avant
+de les déclasser. Trois : protéger les clients dont les avoirs sont juste
+au-dessus du seuil. Quatre : promouvoir plus durablement — cibler des clients
+avec de la marge, pas au ras de la ligne. Cinq : surveiller les frontaliers et
+les jeunes profils. »
+
+
+────────────────────────────────────────────────────────────────────────────
+SLIDE 16 — Prochaines étapes / Merci
+────────────────────────────────────────────────────────────────────────────
+« Pour la suite : valider cette lecture "trompe-l'œil" avec les équipes,
+chiffrer précisément l'impact d'un lissage de la règle flux, et lancer une
+action de rétention ciblée avec un groupe de contrôle pour mesurer. Merci — je
+prends vos questions. »
+
+
+────────────────────────────────────────────────────────────────────────────
+ANNEXE — Réponses aux questions probables
+────────────────────────────────────────────────────────────────────────────
+• « Comment on calcule le taux de déclassement (2,79 %) ? »
+  → Taux mensuel sur la population à risque : chaque couple (client, mois) où
+    le client est MA et où le mois suivant est observé. 2,79 % de ces
+    "MA-mois" se terminent par une sortie. Le 23,9 %, lui, est cumulé par
+    client sur toute la fenêtre.
+
+• « La part de MA monte, alors où est le problème ? »
+  → La hausse de la PART vient des acquisitions + downstream banque privée +
+    retours. En vraies promotions organiques, le solde est négatif (−4 123).
+
+• « Pourquoi le flux revient moins que les avoirs ? »
+  → Asymétrie de la règle : un avoirs se corrige en 1 mois, un flux impose
+    6 mois consécutifs. Un mauvais mois = 6 mois dehors.
+
+• « C'est grave, −4 123 ? »
+  → À relativiser : 31 % reviennent, 16 % étaient borderline. Une part est du
+    bruit de frontière. L'enjeu n'est pas "arrêter l'hémorragie" mais réduire
+    le churn coûteux et évitable, surtout côté flux.
