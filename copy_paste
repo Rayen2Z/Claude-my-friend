@@ -1,108 +1,106 @@
 # ══════════════════════════════════════════════════════════════════════════
-#  BALANCE ORGANIQUE UPGRADE ↔ DOWNGRADE — clients EXISTANTS uniquement
-#
-#  On ne garde que les transitions retail ↔ retail d'un client present DEUX
-#  mois consecutifs :
-#     • upgrade   = Mass retail / MR a potentiel  ->  Mass Affluent
-#     • downgrade = Mass Affluent  ->  Mass retail / MR a potentiel
-#  Cela EXCLUT de fait les acquisitions (statut d'origine = NaN) et le
-#  downstream banque privee (statut d'origine hors retail).
-#
-#  A coller dans une cellule APRES la construction de seg_wide.
-#  Prerequis : seg_wide, periods, ANALYSIS_START, MA_LABEL, idx_to_ym, COL, FIG_DIR.
+#  JEUNES < 25 ANS — ACQUISITIONS & NBI  (analyse simple, faveur collègue)
+#  1 ligne = 1 client × 1 période.  Colonnes attendues : id, période,
+#  NBI mensuel, année d'acquisition, âge.
+#  Objectif :
+#    (1) évolution du nb d'acquisitions + projection reste 2026 & 2027
+#    (2) NBI moyen par jeune client par an + son évolution
+#  → Adapte le bloc CONFIG, puis exécute les cellules dans l'ordre.
 # ══════════════════════════════════════════════════════════════════════════
-import numpy as np, pandas as pd, matplotlib.pyplot as plt
 
-MA           = MA_LABEL
-RETAIL_LOWER = {"Mass retail", "Mass retail à potentiel"}   # retail sous le MA
+# ─────────────────────────── CELLULE 0 · CONFIG + CHARGEMENT ────────────────
+import pandas as pd, numpy as np, matplotlib.pyplot as plt
 
-rows = []
-for p in periods:
-    if p + 1 not in seg_wide.columns:
-        continue
-    a, b = seg_wide[p], seg_wide[p + 1]                     # statut a p (origine) et p+1
-    up   = a.isin(RETAIL_LOWER) & (b == MA)                 # upgrade   retail -> MA
-    down = (a == MA) & b.isin(RETAIL_LOWER)                 # downgrade MA -> retail
-    rows.append({"periode": p, "upgrade": int(up.sum()), "downgrade": int(down.sum())})
+FILE        = "jeunes_moins25.parquet"    # .parquet ou .csv
+COL_ID      = "identifiant_tiers"         # id client
+COL_PERIOD  = "période"                   # 1 valeur par mois
+COL_NBI     = "nbi"                        # NBI du mois
+COL_ACQYR   = "annee_acquisition"         # année d'acquisition (entier, ex. 2023)
+COL_AGE     = "age"                        # âge
+MONTHS_2026 = 7                            # mois de 2026 présents (jan→juil = 7)
 
-bal = pd.DataFrame(rows)
-bal = bal[bal["periode"] >= ANALYSIS_START].copy()
-bal["net"]     = bal["upgrade"] - bal["downgrade"]
-bal["net_cum"] = bal["net"].cumsum()
-bal["mois"]    = bal["periode"].map(idx_to_ym)
-
-U, D = int(bal["upgrade"].sum()), int(bal["downgrade"].sum())
-print("Balance organique upgrade <-> downgrade (clients existants) :")
-print(bal[["mois", "upgrade", "downgrade", "net", "net_cum"]].to_string(index=False))
-print(f"\nTotal upgrades      : {U:,}")
-print(f"Total downgrades    : {D:,}   (a rapprocher des 14 248 declassements de la §3)")
-print(f"NET DELTA organique : {U - D:+,}   | ratio upgrade/downgrade = {U / max(D, 1):.2f}")
-print(f"Mois a solde negatif : {(bal['net'] < 0).sum()} / {len(bal)}")
+df = pd.read_parquet(FILE) if FILE.endswith(".parquet") else pd.read_csv(FILE)
+print("Lignes :", len(df), "| Clients :", df[COL_ID].nunique())
+print("Colonnes :", list(df.columns))
+print(df.dtypes)
+df.head()
 
 
-# ══════════════════════════════════════════════════════════════════════════
-#  ★ CHECK DECISIF — UPGRADE : NOUVELLE PROMOTION vs RETOUR (revolving door)
-#
-#  Le net brut est gonfle par les RETOURS : ~31% des declasses reviennent MA
-#  (§9) et sont recomptes en "upgrade". On isole les VRAIES nouvelles promotions
-#  (client JAMAIS MA auparavant) pour obtenir le net organique reel.
-#     net_first = nouvelles promotions - downgrades   <-- l'indicateur qui compte
-# ══════════════════════════════════════════════════════════════════════════
-ma_bool  = (seg_wide == MA)
-first_ma = pd.Series(np.nan, index=seg_wide.index)          # 1re periode MA observee / client
-for p in seg_wide.columns:
-    m = ma_bool[p] & first_ma.isna()
-    first_ma[m] = p
+# ─────────────────── CELLULE 1 · ANNÉE CALENDAIRE DE CHAQUE LIGNE ───────────
+#  Nécessaire pour le NBI par an (année du mois, pas année d'acquisition).
+#  Gère : date, 'AAAA-MM', 'AAAAMM', ou index entier façon CLV (avec ancrage).
+per = df[COL_PERIOD]
+s   = per.astype(str)
+if np.issubdtype(per.dtype, np.datetime64) or s.str.match(r"\d{4}-\d{2}").all():
+    df["cal_year"] = pd.to_datetime(per, errors="coerce").dt.year
+elif s.str.fullmatch(r"\d{6}").all():                       # AAAAMM
+    df["cal_year"] = s.str[:4].astype(int)
+else:
+    # période = index entier (façon fichiers stock CLV) : ancre un point connu.
+    ANCHOR_PERIOD, ANCHOR_YEAR, ANCHOR_MONTH = 371, 2024, 11   # ← À AJUSTER si besoin
+    m = per.astype(int) - ANCHOR_PERIOD
+    df["cal_year"] = ANCHOR_YEAR + ((ANCHOR_MONTH - 1 + m) // 12)
+print(df["cal_year"].value_counts().sort_index())
 
-rows = []
-for p in periods:
-    if p + 1 not in seg_wide.columns:
-        continue
-    a, b = seg_wide[p], seg_wide[p + 1]
-    up   = a.isin(RETAIL_LOWER) & (b == MA)
-    down = (a == MA) & b.isin(RETAIL_LOWER)
-    rows.append({
-        "periode":   p,
-        "up_first":  int((up & (first_ma == p + 1)).sum()),  # jamais MA avant = vraie promotion
-        "up_return": int((up & (first_ma <  p + 1)).sum()),  # deja MA avant  = revolving door
-        "downgrade": int(down.sum()),
-    })
-d2 = pd.DataFrame(rows)
-d2 = d2[d2["periode"] >= ANALYSIS_START].copy()
-d2["net_first"] = d2["up_first"] - d2["downgrade"]           # ★ net des NOUVELLES promotions
-d2["net_brut"]  = d2["up_first"] + d2["up_return"] - d2["downgrade"]
-d2["mois"]      = d2["periode"].map(idx_to_ym)
 
-F, R, Dd = int(d2["up_first"].sum()), int(d2["up_return"].sum()), int(d2["downgrade"].sum())
-print("\nUpgrade decompose : nouvelle promotion vs retour")
-print(d2[["mois", "up_first", "up_return", "downgrade", "net_first", "net_brut"]].to_string(index=False))
-print(f"\nNouvelles promotions (jamais MA avant) : {F:,}")
-print(f"Retours (revolving door)               : {R:,}")
-print(f"Downgrades                             : {Dd:,}")
-print(f"NET nouvelles promotions : {F - Dd:+,}   <-- indicateur organique REEL")
-print(f"NET brut (avec retours)  : {F + R - Dd:+,}")
+# ──────────────── CELLULE 2 · ACQUISITIONS PAR AN + PROJECTION ──────────────
+acq = (df.drop_duplicates(COL_ID)              # 1 client compté une fois
+         .groupby(COL_ACQYR)[COL_ID].count()
+         .rename("acquisitions").sort_index())
+print("Acquisitions par année d'acquisition :"); print(acq, "\n")
 
-# ── Graphes ────────────────────────────────────────────────────────────────
-fig, ax = plt.subplots(2, 1, figsize=(13, 9), sharex=True,
-                       gridspec_kw={"height_ratios": [1, 1]})
-x = np.arange(len(bal))
-ax[0].bar(x,  bal["upgrade"],   color=COL["active"], label="Upgrade brut (retail -> MA)")
-ax[0].bar(x, -bal["downgrade"], color=COL["mix"],    label="Downgrade (MA -> retail)")
-ax[0].plot(x, bal["net"], color=COL["dark"], marker="o", lw=2, label="Net brut")
-ax[0].axhline(0, color="#94A3B8", lw=1)
-ax[0].set_ylabel("Nb clients / mois"); ax[0].legend(fontsize=8, loc="upper left")
-ax[0].set_title(f"Brut : net {U - D:+,} (gonfle par les retours)")
+full   = acq[acq.index <= 2025]                 # années complètes 2021→2025
+ytd26  = int(acq.get(2026, 0))
+proj26 = round(ytd26 * 12 / MONTHS_2026)        # annualisation simple du réalisé 2026
 
-xf = np.arange(len(d2))
-ax[1].bar(xf, d2["up_first"],  color=COL["active"], label="Nouvelle promotion (jamais MA)")
-ax[1].bar(xf, d2["up_return"], bottom=d2["up_first"], color=COL["avoirs"], label="Retour (revolving door)")
-ax[1].bar(xf, -d2["downgrade"], color=COL["mix"], label="Downgrade")
-ax[1].plot(xf, d2["net_first"], color=COL["dark"], marker="o", lw=2, label="Net NOUVELLES promotions")
-ax[1].axhline(0, color="#94A3B8", lw=1)
-ax[1].set_ylabel("Nb clients / mois"); ax[1].legend(fontsize=8, loc="upper left", ncol=2)
-ax[1].set_title(f"Net reel des nouvelles promotions : {F - Dd:+,}")
-ax[1].set_xticks(xf); ax[1].set_xticklabels(d2["mois"], rotation=45, ha="right")
+# 2027 : tendance linéaire sur les années pleines + variante CAGR
+yrs, vals = full.index.values.astype(float), full.values.astype(float)
+a, b = np.polyfit(yrs, vals, 1)
+proj27_lin  = round(a * 2027 + b)
+cagr        = (full.iloc[-1] / full.iloc[0]) ** (1 / (len(full) - 1)) - 1
+proj27_cagr = round(proj26 * (1 + cagr))
 
-plt.tight_layout()
-plt.savefig(FIG_DIR / "11_balance_upgrade_downgrade.png", bbox_inches="tight", facecolor="white")
-plt.show()
+print(f"2026 : {ytd26} acquis. sur {MONTHS_2026} mois  →  projeté année pleine ≈ {proj26}")
+print(f"2027 (tendance linéaire) ≈ {proj27_lin}")
+print(f"2027 (CAGR {cagr:+.1%}, base 2026 projeté) ≈ {proj27_cagr}")
+
+fig, ax = plt.subplots(figsize=(10, 5))
+ax.bar(full.index.astype(str), full.values, color="#1E6FA8", label="Réalisé (année pleine)")
+ax.bar("2026", ytd26, color="#9DC3E0", label=f"2026 réalisé ({MONTHS_2026} mois)")
+ax.bar("2026", proj26 - ytd26, bottom=ytd26, color="#E0912A", label="2026 projeté (reste)")
+ax.bar("2027", proj27_lin, color="#C13E70", label="2027 projeté (tendance)")
+ax.set_ylabel("Nb d'acquisitions < 25 ans")
+ax.set_title("Acquisitions jeunes par an + projection 2026 / 2027")
+ax.legend(fontsize=8); plt.tight_layout(); plt.show()
+
+
+# ──────────────── CELLULE 3 · NBI MOYEN PAR JEUNE CLIENT PAR AN ─────────────
+g = df.groupby("cal_year").agg(nbi_total=(COL_NBI, "sum"),
+                               n_clients=(COL_ID, "nunique"),
+                               nbi_moy_mensuel=(COL_NBI, "mean"))       # par client-mois (comparable)
+g["nbi_moy_annuel_par_client"] = g["nbi_total"] / g["n_clients"]        # /!\ 2026 partiel (7 mois)
+print(g.round(1))
+
+fig, ax = plt.subplots(1, 2, figsize=(13, 5))
+x = g.index.astype(str)
+ax[0].plot(x, g["nbi_moy_mensuel"], marker="o", lw=2, color="#0F8A5F")
+ax[0].set_title("NBI moyen mensuel par client\n(comparable entre années)")
+ax[0].set_ylabel("€ / client-mois")
+ax[1].plot(x, g["nbi_moy_annuel_par_client"], marker="s", lw=2, color="#1E6FA8")
+ax[1].set_title("NBI moyen annuel par client\n(2026 = 7 mois → partiel)")
+ax[1].set_ylabel("€ / client / an")
+for a_ in ax:
+    for xi, yi in zip(x, a_.lines[0].get_ydata()):
+        a_.annotate(f"{yi:,.0f}", (xi, yi), textcoords="offset points", xytext=(0, 8), ha="center", fontsize=8)
+    a_.tick_params(axis="x", rotation=45)
+plt.tight_layout(); plt.show()
+
+# Astuce : pour comparer 2026 à armes égales, compare la colonne
+# 'nbi_moy_mensuel' (par client-mois) plutôt que l'annuel par client.
+
+
+# ──────────────── CELLULE 4 (optionnel) · CONTRÔLE ÂGE ──────────────────────
+print("Âge — stats :"); print(df[COL_AGE].describe().round(1))
+print("\nÂge moyen à l'acquisition (par cohorte) :")
+print(df.sort_values(COL_PERIOD).drop_duplicates(COL_ID)
+        .groupby(COL_ACQYR)[COL_AGE].mean().round(1))
