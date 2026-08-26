@@ -104,3 +104,44 @@ print("Âge — stats :"); print(df[COL_AGE].describe().round(1))
 print("\nÂge moyen à l'acquisition (par cohorte) :")
 print(df.sort_values(COL_PERIOD).drop_duplicates(COL_ID)
         .groupby(COL_ACQYR)[COL_AGE].mean().round(1))
+
+
+
+
+
+
+
+
+
+
+
+fig, ax = plt.subplots(figsize=(10, 5.5))
+
+for c in LABELS[:-1]:                       # "0-12", "12-18", "18-25"
+    col = ax.plot(hist.index, hist[c], marker="o", lw=2, label=c)[0].get_color()
+
+    anchor = hist[c].iloc[-1]               # 2025 réel, point de départ des deux
+    ax.plot([LAST_ACTUAL, 2026, 2027],
+            [anchor, trend.loc[c, 2026], trend.loc[c, 2027]],
+            ls="--", marker="o", mfc="white", color=col)
+    ax.plot([LAST_ACTUAL, 2026, 2027],
+            [anchor, cagr_proj.loc[c, 2026], cagr_proj.loc[c, 2027]],
+            ls=":", marker="s", ms=4, mfc="white", color=col)
+
+ax.axvline(LAST_ACTUAL + 0.5, ls=":", c="grey", lw=1)
+ax.text(LAST_ACTUAL + 0.6, ax.get_ylim()[1] * 0.95, "projections",
+        color="grey", fontsize=9, va="top")
+
+# légende à deux étages : couleur = tranche, style = méthode
+from matplotlib.lines import Line2D
+styles = [Line2D([], [], c="grey", ls="-",  label="réel"),
+          Line2D([], [], c="grey", ls="--", label="tendance linéaire"),
+          Line2D([], [], c="grey", ls=":",  label="CAGR 3 ans")]
+first = ax.legend(loc="upper left", title="tranche")
+ax.add_artist(first)
+ax.legend(handles=styles, loc="lower right", fontsize=9)
+
+ax.set_title("Acquisitions youngsters — réel 2021-2025, projections 2026-2027")
+ax.set_ylabel("nb clients"); ax.set_xlabel("année d'acquisition")
+ax.set_xticks(range(2021, 2028))
+plt.tight_layout(); plt.show()
