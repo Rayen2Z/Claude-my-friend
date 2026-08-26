@@ -17,9 +17,9 @@ COL_YACQ   = "Annee acquisition"
 COL_AGE    = "Age"
 COL_NBI    = "NBI"
 
-CUR_YEAR      = 2026
-MONTHS_YTD    = 7                        # data stops at July 2026
-ANNUALIZE_NBI = True                     # True if NBI is a YTD cumulative flow
+CUR_YEAR   = 2026
+MONTHS_YTD = 7                           # data stops at July 2026
+MIN_MOIS   = 2                           # drop client-years with fewer months (noisy run rate)
 
 df = pd.read_excel(PATH)                 # pd.read_csv(PATH, sep=";", decimal=",")
 df.columns = df.columns.str.strip()
@@ -110,30 +110,37 @@ plt.tight_layout(); plt.show()
 
 # %% [markdown]
 # ## 2. NBI — clients aged [18, 25)
-# Age is taken at each period, so a client moves in and out of the band over time.
+# NBI is monthly, so: sum per client x year, then average across clients.
+# `mois` = months actually observed in the band that year — handles acquisition
+# mid-year, the 25th birthday, and the 7-month 2026 in one go.
 
 # %%
 band = df[(df[COL_AGE] >= 18) & (df[COL_AGE] < 25)].copy()
 
-nbi = (band.groupby("period_year")
-           .agg(nb_clients=(COL_ID, "nunique"),
-                nbi_total=(COL_NBI, "sum"),
-                nbi_moyen=(COL_NBI, "mean"),
-                nbi_median=(COL_NBI, "median"))
-           .round(1))
+cy = (band.groupby([COL_ID, "period_year"])
+          .agg(nbi_annee=(COL_NBI, "sum"), mois=(COL_PERIOD, "nunique"))
+          .reset_index())
+cy["nbi_run_rate"] = cy["nbi_annee"] / cy["mois"] * 12
 
-if ANNUALIZE_NBI:
-    for c in ["nbi_total", "nbi_moyen", "nbi_median"]:
-        nbi.loc[CUR_YEAR, c] = round(nbi.loc[CUR_YEAR, c] * scale, 1)
+print("client-années écartées (< MIN_MOIS):", (cy["mois"] < MIN_MOIS).sum())
+cy = cy[cy["mois"] >= MIN_MOIS]
 
-nbi["evol_%"] = (nbi["nbi_moyen"].pct_change() * 100).round(1)
+nbi = (cy.groupby("period_year")
+         .agg(nb_clients=(COL_ID, "nunique"),
+              mois_moyen=("mois", "mean"),
+              nbi_total=("nbi_annee", "sum"),
+              nbi_moyen_observe=("nbi_annee", "mean"),      # ce qui a réellement été encaissé
+              nbi_moyen_annualise=("nbi_run_rate", "mean"), # comparable entre années
+              nbi_median_annualise=("nbi_run_rate", "median"))
+         .round(1))
+nbi["evol_%"] = (nbi["nbi_moyen_annualise"].pct_change() * 100).round(1)
 nbi
 
 # %%
 fig, ax = plt.subplots(figsize=(9, 5))
-ax.bar(nbi.index, nbi["nbi_moyen"], color="#4C72B0")
-ax.set_title("NBI moyen par client 18-24 ans" + (" (2026 annualisé)" if ANNUALIZE_NBI else ""))
-ax.set_ylabel("NBI moyen"); ax.set_xlabel("année")
+ax.bar(nbi.index, nbi["nbi_moyen_annualise"], color="#4C72B0")
+ax.set_title("NBI moyen annualisé par client 18-24 ans")
+ax.set_ylabel("NBI / an"); ax.set_xlabel("année")
 plt.tight_layout(); plt.show()
 
 # %% [markdown]
@@ -141,8 +148,18 @@ plt.tight_layout(); plt.show()
 # Shows the ramp as they age, which the yearly average hides.
 
 # %%
-by_age = (band[band["period_year"] < CUR_YEAR]
-            .groupby(band[COL_AGE].astype(int))
-            .agg(nb=(COL_ID, "nunique"), nbi_moyen=(COL_NBI, "mean"))
+ba = band.copy()
+ba["age_int"] = ba[COL_AGE].astype(int)
+
+ca = (ba.groupby([COL_ID, "age_int"])
+        .agg(nbi=(COL_NBI, "sum"), mois=(COL_PERIOD, "nunique"))
+        .reset_index())
+ca = ca[ca["mois"] >= MIN_MOIS]
+ca["run_rate"] = ca["nbi"] / ca["mois"] * 12
+
+by_age = (ca.groupby("age_int")
+            .agg(nb_clients=(COL_ID, "nunique"),
+                 nbi_moyen_annualise=("run_rate", "mean"),
+                 nbi_median_annualise=("run_rate", "median"))
             .round(1))
 by_age
