@@ -1,494 +1,116 @@
 # ══════════════════════════════════════════════════════════════════════════
-#  CENTRES CRÉDIT IMMO — CAPACITÉ D'APPEL vs STOCK, VIA LE FUNNEL BANNIÈRE
-#  1 ligne = 1 client rattaché à un centre (CCI).
-#  Parcours réel : les 10k clients reçoivent une bannière in-app ; SEULS ceux
-#  qui CLIQUENT déclenchent un appel du centre. Le centre n'appelle donc pas
-#  tout le stock, mais  stock × taux_de_clic.
-#  ENGAGEMENT MÉTIER : rappeler chaque cliqueur sous 24 h (contact supposé 100 %,
-#  joignabilité hors scope) → contrainte = clics/jour <= capacité d'appel/jour.
-#  Deux hypothèses (à ajuster avec le métier) : TAUX DE CLIC et APPELS/JOUR.
-#  → Adapte le bloc CONFIG puis exécute les cellules dans l'ordre.
+#  INJECTION OPTIMALE PAR CENTRE — campagne crédit immo (rappel < 24 h)
+#
+#  Parcours : bannière in-app → clients qui CLIQUENT → rappel du centre sous 24 h.
+#  Contrainte 24 h  ⇔  clics/jour <= capacité d'appel/jour du centre.
+#
+#  CŒUR : par centre, croiser les 2 variables
+#     capacité/mois = appels_jour × JOURS_MOIS        (clics appelables sous 24 h)
+#     injection_opt = capacité / taux_clic            (clients à injecter/mois)
+#  puis confronter injection_opt à l'ACQUISITION mensuelle du centre (soutenable ?).
+#
+#  (Les versions exploratoires précédentes — one-shot, répartition égale — restent
+#   dans l'historique git si besoin.)
 # ══════════════════════════════════════════════════════════════════════════
 
-# ─────────────────────────── CELLULE 0 · CONFIG + CHARGEMENT ────────────────
+# ─────────────────────────── CELLULE 0 · CHARGEMENT ─────────────────────────
 import pandas as pd, numpy as np, matplotlib.pyplot as plt
 
-FILE         = "clients_centres.xlsx"   # .xlsx / .csv / .parquet
-COL_ID       = "Identifiant Tiers"
-COL_CCI      = "CCI"
-
-CLICK_RATE    = 0.05          # HYPOTHÈSE 1 · taux de clic bannière (souvent 2–7 %)
-CALLS         = [2, 3, 4, 5]  # HYPOTHÈSE 2 · appels/jour testés (cellules 2-3)
-RATES_GRID    = [0.02, 0.03, 0.05, 0.07]   # taux de clic pour la grille de sensibilité
-HORIZON_DAYS  = 21            # horizon de référence en jours ouvrés
-
-CAMPAIGN_DAYS = 30            # HYPOTHÈSE 3 · durée de diffusion bannière (jours ouvrés) — cellule 4
-CALLS_PER_DAY = 5             # rythme retenu pour le scénario "flux" de la cellule 4
+FILE    = "clients_centres.xlsx"     # .xlsx / .csv / .parquet
+COL_ID  = "Identifiant Tiers"
+COL_CCI = "CCI"
 
 if   FILE.endswith(".xlsx"):    df = pd.read_excel(FILE)
 elif FILE.endswith(".parquet"): df = pd.read_parquet(FILE)
 else:                           df = pd.read_csv(FILE)
+df = df.dropna(subset=[COL_ID, COL_CCI]).drop_duplicates([COL_ID])
+stock = (df.groupby(COL_CCI)[COL_ID].nunique().sort_values(ascending=False).rename("stock"))
+print(f"{stock.sum():,} clients · {len(stock)} centres")
+print(stock.to_string())
 
-print("Lignes brutes :", len(df), "| doublons ID :", int(df[COL_ID].duplicated().sum()))
-df = df.dropna(subset=[COL_ID, COL_CCI]).drop_duplicates([COL_ID])   # 1 client compté une fois
-print("Clients uniques :", df[COL_ID].nunique(), "| Centres :", df[COL_CCI].nunique())
 
-
-# ──────────────── CELLULE 1 · DISTRIBUTION DU STOCK PAR CENTRE ──────────────
-stock = (df.groupby(COL_CCI)[COL_ID].nunique()
-           .sort_values(ascending=False).rename("nb_clients"))
-print("Stock (clients ciblés) par centre — statistiques :")
-print(stock.describe().round(1))
-print(f"\nStock total : {stock.sum():,} clients sur {len(stock)} centres")
-print("\nTop 10 :"); print(stock.head(10))
-print("\nBottom 10 :"); print(stock.tail(10))
-
+# ────────────────── CELLULE 1 · DISTRIBUTION (stock par centre) ─────────────
 fig, ax = plt.subplots(figsize=(10, max(3, 0.5 * len(stock))))
-s2 = stock.iloc[::-1]                                   # petit -> grand pour la lecture
+s2 = stock.iloc[::-1]
 ax.barh(s2.index.astype(str), s2.values, color="#1E6FA8")
 for i, v in enumerate(s2.values):
     ax.text(v, i, f" {v:,}", va="center", fontsize=9)
-ax.set_title("Nombre de clients ciblés par centre")
+ax.set_title("Stock (clients rattachés) par centre")
 ax.set_xlabel("clients"); ax.set_ylabel("centre (CCI)")
 plt.tight_layout(); plt.show()
 
 
-# ──── CELLULE 2 · SIMULATION — la bannière filtre le stock via le taux de clic ─
-# Clics attendus par centre = stock × CLICK_RATE ; ce sont eux qui déclenchent
-# un appel. Jours pour tout appeler = ceil(clics / appels_par_jour).
-clicks = (stock * CLICK_RATE).round().astype(int).rename("clics_attendus")
-print(f"Taux de clic = {CLICK_RATE:.0%}  →  {clicks.sum():,} clics attendus "
-      f"sur {stock.sum():,} clients ciblés")
-print("\nClics attendus par centre — statistiques :"); print(clicks.describe().round(1))
+# ═══════════════ CELLULE 2 · CŒUR — INJECTION OPTIMALE PAR CENTRE ═══════════
+JOURS_MOIS = 20
+TAUX_CLIC  = [0.02, 0.03, 0.05, 0.07]     # scénarios de taux de clic
+TAUX_CIBLE = 0.05                         # hypothèse centrale pour la reco chiffrée
 
-sim = pd.DataFrame({"nb_clients": stock, "clics_attendus": clicks})
-for r in CALLS:
-    sim[f"jours_{r}_par_jour"] = np.ceil(sim["clics_attendus"] / r).astype(int)
-print("\nJours pour appeler tous les clics, par centre (les plus chargés) :")
-print(sim.sort_values("clics_attendus", ascending=False).head(10))
+# --- À REMPLIR : paramètres PAR CENTRE (dict {CCI: valeur}) -------------------
+# Astuce pour régénérer les clés :
+#   import pprint; pprint.pprint({str(c): None for c in stock.index})
+APPELS_JOUR = {str(c): 5    for c in stock.index}   # appels/jour par centre (max 5)
+ACQ_MOIS    = {str(c): None for c in stock.index}   # acquisitions/mois par centre  ← À REMPLIR
 
-rows = {}
-for r in CALLS:
-    d = np.ceil(clicks / r)
-    rows[f"{r} appels/j"] = {
-        "médiane jours":                 float(d.median()),
-        "moyenne jours":                 round(float(d.mean()), 1),
-        "MAX jours (vider la liste)":    int(d.max()),
-        f"nb centres > {HORIZON_DAYS}j": int((d > HORIZON_DAYS).sum()),
-    }
-print(f"\nRésumé par rythme (sur les clics, horizon {HORIZON_DAYS}j) :")
-print(pd.DataFrame(rows).T)
+apj  = pd.Series({c: APPELS_JOUR.get(str(c), np.nan) for c in stock.index}, dtype="float")
+acq  = pd.Series({c: ACQ_MOIS.get(str(c),   np.nan) for c in stock.index}, dtype="float")
+capm = apj * JOURS_MOIS                              # capacité mensuelle (clics appelables)
 
-# Courbe : % de centres ayant appelé tous leurs cliqueurs au jour d
-fig, ax = plt.subplots(figsize=(11, 5))
-maxd   = int(np.ceil(clicks.replace(0, 1) / min(CALLS)).max())
-days   = np.arange(1, maxd + 1)
-colors = ["#1E6FA8", "#0F8A5F", "#E0912A", "#C13E70", "#7A5AA6"]
-for r, c in zip(CALLS, colors):
-    d = np.ceil(clicks / r)
-    ax.plot(days, [(d <= dd).mean() * 100 for dd in days], lw=2, color=c, label=f"{r} appels/j")
-ax.axvline(HORIZON_DAYS, color="#94A3B8", ls="--", lw=1.5, label=f"{HORIZON_DAYS} j (horizon)")
-ax.set_xlabel("jours ouvrés"); ax.set_ylabel("% de centres ayant fini")
-ax.set_title(f"Capacité au taux de clic {CLICK_RATE:.0%} : % de centres ayant appelé tous leurs cliqueurs")
-ax.set_ylim(0, 101); ax.legend(); ax.grid(alpha=.3)
-plt.tight_layout(); plt.show()
+# (1) CROSS-MATCH : injection optimale/mois par centre × taux de clic
+core = pd.DataFrame({"stock": stock, "appels_j": apj, "capacite_mois": capm, "acq_mois": acq})
+for r in TAUX_CLIC:
+    core[f"inj_{r:.0%}"] = (capm / r).round()       # = capacité / taux_clic
+core = core.sort_values("stock", ascending=False)
+cols1 = ["stock", "appels_j", "capacite_mois", "acq_mois"] + [f"inj_{r:.0%}" for r in TAUX_CLIC]
+print("(1) INJECTION OPTIMALE /centre/mois selon le taux de clic (= capacité / clic) :")
+print(core[cols1].to_string())
 
-
-# ──── CELLULE 3 · SENSIBILITÉ — les deux hypothèses en même temps ────────────
-# MAX jours pour que TOUS les centres aient fini, selon (taux de clic × appels/j).
-grid = pd.DataFrame(
-    {f"{r}/j": [int(np.ceil((stock * cr).round() / r).max()) for cr in RATES_GRID]
-     for r in CALLS},
-    index=[f"{cr:.0%}" for cr in RATES_GRID])
-grid.index.name = "taux de clic"
-print("MAX jours ouvrés pour vider TOUTE la liste (le plus gros centre contraint) :")
-print(grid)
-
-fig, ax = plt.subplots(figsize=(8, 4.5))
-im = ax.imshow(grid.values, cmap="YlOrRd", aspect="auto")
-ax.set_xticks(range(len(CALLS)));      ax.set_xticklabels([f"{r}/j" for r in CALLS])
-ax.set_yticks(range(len(RATES_GRID))); ax.set_yticklabels([f"{cr:.0%}" for cr in RATES_GRID])
-for i in range(len(RATES_GRID)):
-    for j in range(len(CALLS)):
-        v = grid.values[i, j]
-        ax.text(j, i, v, ha="center", va="center",
-                color="white" if v > grid.values.max() * .6 else "black", fontsize=11)
-ax.set_xlabel("appels / jour"); ax.set_ylabel("taux de clic")
-ax.set_title("MAX jours ouvrés pour vider toute la liste")
-plt.colorbar(im, label="jours"); plt.tight_layout(); plt.show()
-
-# Export optionnel : sim.to_csv("simulation_capacite_centres.csv")
-
-
-# ──── CELLULE 4 · FLUX : rappel < 24 h tenable ? (surcharge / sous-charge) ────
-# Engagement : chaque cliqueur rappelé sous 24 h → clics/jour <= capacité/jour.
-# Clics étalés → arrivée/jour = clics / CAMPAIGN_DAYS. charge % = arrivée ÷ capacité :
-#   charge > 100 %                → SURCHARGE → rappel > 24 h (flux de clics > capacité)
-#   charge < seuil bas (IDLE)     → SOUS-ALIMENTÉ (jours creux, tourne à vide)
-#   entre les deux                → OK (24 h tenu, capacité bien utilisée)
-IDLE_ALERT = 10       # seuil d'alerte sous-charge : nb de jours creux (~2 sem. ouvrées)
-
-arr     = clicks / CAMPAIGN_DAYS
-occ_thr = (1 - IDLE_ALERT / CAMPAIGN_DAYS) * 100          # charge % sous laquelle = jours creux
-d = pd.DataFrame({
-    "clics_attendus":   clicks,
-    "arrivee_par_jour": arr.round(2),
-    "charge_%":         (arr / CALLS_PER_DAY * 100).round(0),
-    "jours_creux":      (CAMPAIGN_DAYS * (1 - (arr / CALLS_PER_DAY).clip(upper=1))).round(0).astype(int),
-    "backlog_fin":      ((arr - CALLS_PER_DAY).clip(lower=0) * CAMPAIGN_DAYS).round(0).astype(int),
-})
-d["etat"] = np.select([d["charge_%"] > 100, d["charge_%"] < occ_thr],
-                      ["surcharge", "sous-alimenté"], default="ok")
-
-tot_clicks, tot_cap = int(clicks.sum()), len(stock) * CALLS_PER_DAY * CAMPAIGN_DAYS
-print(f"Scénario : clic {CLICK_RATE:.0%} · {CALLS_PER_DAY} appels/j · campagne {CAMPAIGN_DAYS} j")
-print(f"Demande {tot_clicks:,} clics vs capacité {tot_cap:,} appels → occupation GLOBALE ≈ "
-      f"{tot_clicks / tot_cap * 100:.0f} %")
-print("Répartition des centres :", d["etat"].value_counts().to_dict())
-
-print("\n═══ PARTIE A · SURCHARGE → RAPPEL > 24 H (flux de clics > capacité) ═══")
-sur = d[d["etat"] == "surcharge"].sort_values("charge_%", ascending=False)
-print("Aucun centre en surcharge à ce scénario." if sur.empty
-      else sur[["clics_attendus", "arrivee_par_jour", "charge_%", "backlog_fin"]].head(12).to_string())
-
-print(f"\n═══ PARTIE B · SOUS-ALIMENTÉS (> {IDLE_ALERT} j creux) ═══")
-sub = d[d["etat"] == "sous-alimenté"].sort_values("jours_creux", ascending=False)
-print("Aucun centre sous-alimenté à ce scénario." if sub.empty
-      else sub[["clics_attendus", "arrivee_par_jour", "charge_%", "jours_creux"]].head(12).to_string())
-
-# Graphe unique : charge par centre, 3 couleurs, 2 seuils
-COLOR = {"surcharge": "#C0492F", "ok": "#0F8A5F", "sous-alimenté": "#E0912A"}
-ds = d.sort_values("charge_%")
-fig, ax = plt.subplots(figsize=(11, 5))
-ax.bar(range(len(ds)), ds["charge_%"].values, color=[COLOR[e] for e in ds["etat"]])
-ax.axhline(100, ls="--", color="#C0492F", lw=1.3, label="surcharge (100 %)")
-ax.axhline(occ_thr, ls="--", color="#E0912A", lw=1.3, label=f"sous-charge (> {IDLE_ALERT} j creux)")
-ax.set_xticks(range(len(ds))); ax.set_xticklabels(ds.index.astype(str), rotation=45, ha="right")
-ax.set_xlabel("centre (CCI)"); ax.set_ylabel("charge % (demande / capacité)")
-ax.set_title(f"Charge des centres — surcharge ↑ / sous-alimenté ↓  "
-             f"(clic {CLICK_RATE:.0%}, {CALLS_PER_DAY} appels/j, {CAMPAIGN_DAYS} j)")
-ax.legend(); plt.tight_layout(); plt.show()
-
-# Export optionnel : d.to_csv("charge_centres.csv")
-
-
-# ──── CELLULE 5 · RÉTRO-INGÉNIERIE — injection idéale de clients / centre ─────
-# Campagne PERMANENTE → raisonnement en régime stationnaire, par MOIS.
-# Chaîne inversée :  injection × taux_clic = clics = appels à passer sous 24 h.
-# Engagement rappel < 24 h → clics/jour <= capacité/jour ; l'injection idéale est
-# le PLAFOND qui sature la capacité (au-delà, le 24 h saute).
-#   capacité_mois       = APPELS_JOUR × JOURS_MOIS
-#   injection_idéale(r) = capacité_mois / r        (clients / centre / mois)
-APPELS_JOUR   = 5
-JOURS_MOIS    = 20                          # jours ouvrés / mois
-TAUX_CLIC     = [0.02, 0.03, 0.05, 0.07]    # éventail plausible
-TAUX_CIBLE    = 0.05                         # hypothèse centrale (à valider avec le métier)
-N_CENTRES     = 6
-
-cap_mois = APPELS_JOUR * JOURS_MOIS
-print(f"Capacité par centre : {APPELS_JOUR} appels/j × {JOURS_MOIS} j = {cap_mois} appels/mois")
-print(f"→ il faut {cap_mois} CLICS/mois pour occuper pleinement un centre.\n")
-
-# (A) injection nécessaire selon le taux de clic
-reco = pd.DataFrame({
-    "taux_clic":              [f"{r:.0%}" for r in TAUX_CLIC],
-    "injection_centre_mois":  [round(cap_mois / r) for r in TAUX_CLIC],
-})
-reco[f"injection_totale_{N_CENTRES}c"] = reco["injection_centre_mois"] * N_CENTRES
-print("(A) Injection pour occuper pleinement un centre, selon le taux de clic :")
-print(reco.to_string(index=False))
-
-inj_cible   = round(cap_mois / TAUX_CIBLE)
-inj_prudent = round(cap_mois / max(TAUX_CLIC))   # dimensionné pour le clic HAUT = SLA 24h garanti
-print(f"\nENGAGEMENT : rappeler chaque cliqueur sous 24 h → il faut clics/jour <= capacité/jour.")
-print(f"L'injection idéale est donc un PLAFOND : au-delà, le flux de clics dépasse la capacité "
-      f"et le rappel 24 h saute.")
-print(f"➜ Cible {TAUX_CIBLE:.0%} : ~{inj_cible} clients/centre/mois (~{inj_cible*N_CENTRES} au total) "
-      f"— tient le 24 h si le clic est ≈ {TAUX_CIBLE:.0%}.")
-print(f"➜ Prudent (24 h garanti même à {max(TAUX_CLIC):.0%}) : ~{inj_prudent}/centre/mois "
-      f"— si le clic est plus bas, jours creux mais 24 h toujours tenu.")
-print(f"  Campagne permanente + ajustable → démarrer prudent, puis monter vers la cible en "
-      f"observant le taux de clic réel.")
-
-# (B) si on s'engage sur l'injection cible, quelle charge selon le VRAI taux de clic ?
-band = pd.DataFrame({
-    "taux_clic_réel": [f"{r:.0%}" for r in TAUX_CLIC],
-    "clics_mois":     [round(inj_cible * r) for r in TAUX_CLIC],
-    "charge_%":       [round(inj_cible * r / cap_mois * 100) for r in TAUX_CLIC],
-})
-band["effet"] = np.select(
-    [band["charge_%"] < 90, band["charge_%"] > 110],
-    ["sous-charge (jours creux)", "surcharge (backlog)"], default="OK")
-print(f"\n(B) Si on injecte {inj_cible}/centre/mois et que le taux de clic diffère :")
-print(band.to_string(index=False))
-
-# (C) faisabilité : le pool attaché couvre-t-il l'injection cible ? (nécessite la cellule 1)
-try:
-    feas = pd.DataFrame({"stock_attaché": stock})
-    feas["mois_couverts"] = (feas["stock_attaché"] / inj_cible).round(1)
-    print(f"\n(C) Couverture du pool attaché à l'injection cible ({inj_cible}/mois) — "
-          f"< 1 = à réalimenter par les acquisitions :")
-    print(feas.sort_values("mois_couverts").to_string())
-except NameError:
-    print("\n(C) Exécute la cellule 1 pour la faisabilité par centre (série 'stock').")
-
-# Graphe : injection idéale vs taux de clic
-fig, ax = plt.subplots(figsize=(9, 5))
-inj = [cap_mois / r for r in TAUX_CLIC]
-ax.bar([f"{r:.0%}" for r in TAUX_CLIC], inj, color="#1E6FA8")
-ax.axhline(inj_cible, ls="--", color="#C0492F", lw=1.5, label=f"cible {TAUX_CIBLE:.0%} = {inj_cible}")
-for i, v in enumerate(inj):
-    ax.text(i, v, f"{round(v)}", ha="center", va="bottom", fontsize=9)
-ax.set_xlabel("taux de clic"); ax.set_ylabel("injection / centre / mois")
-ax.set_title(f"Injection idéale par centre pour occuper {cap_mois} appels/mois")
-ax.legend(); plt.tight_layout(); plt.show()
-
-# Export optionnel : reco.to_csv("injection_ideale.csv")
-
-
-# ──── CELLULE 6 · RECOMMANDATION FINALE — injection par centre ───────────────
-# Injection reco / centre / mois = capacité_mois / taux_clic
-#   capacité_mois = appels/jour × jours/mois   (fonction des 2 variables)
-# APPELS_JOUR : scalaire (même capacité partout) OU dict {CCI: appels/j}.
-TAUX_CIBLE  = 0.05
-APPELS_JOUR = 5          # ex. {"CENTRE_A": 5, "CENTRE_B": 3, ...} si capacités différentes
-JOURS_MOIS  = 20
-MARGE       = 0.0        # marge de sécurité optionnelle (0.15 = +15 % d'injection)
-TAUX_CLIC   = [0.02, 0.03, 0.05, 0.07]     # éventail pour les tableaux de sensibilité
-
-# capacité mensuelle par centre
-if isinstance(APPELS_JOUR, dict):
-    apj = pd.Series(APPELS_JOUR).reindex(stock.index)
-    if apj.isna().any():
-        print("⚠ centres sans 'appels/j' défini (→ 0) :", list(apj[apj.isna()].index))
-    apj = apj.fillna(0)
-else:
-    apj = pd.Series(APPELS_JOUR, index=stock.index)
-cap = (apj * JOURS_MOIS).astype(int)
-
-# (1) tableau de reco au scénario cible
-reco = pd.DataFrame({
-    "stock_attaché":       stock,
-    "appels_jour":         apj.astype(int),
-    "capacite_mois":       cap,
-    "injection_reco_mois": (cap / TAUX_CIBLE * (1 + MARGE)).round().astype(int),
-})
-reco["mois_de_pool"] = (reco["stock_attaché"] / reco["injection_reco_mois"]).round(1)
-reco["alerte"]       = np.where(reco["mois_de_pool"] < 1, "pool < 1 mois → réalimenter", "OK")
-reco = reco.sort_values("stock_attaché", ascending=False)
-print(f"════ RECOMMANDATION · clic {TAUX_CIBLE:.0%} · {JOURS_MOIS} j/mois · marge {MARGE:.0%} ════")
-print(reco.to_string())
-print(f"\n➜ Injection totale recommandée : {reco['injection_reco_mois'].sum():,} clients/mois "
-      f"sur {len(reco)} centres")
-inj_prudent_c = int((cap / max(TAUX_CLIC)).round().iloc[0]) if len(cap) else 0
-print(f"SLA 24 h : l'injection ci-dessus tient si le clic ≈ {TAUX_CIBLE:.0%}. Pour garantir le "
-      f"rappel < 24 h même à {max(TAUX_CLIC):.0%}, plafonner à ~{inj_prudent_c}/centre/mois "
-      f"(dimensionné sur le clic haut).")
-
-# (2) injection PAR CENTRE selon le taux de clic (variable 1)
-matC = pd.DataFrame({f"clic {r:.0%}": (cap / r).round().astype(int) for r in TAUX_CLIC})
-matC.insert(0, "stock", stock)
-print("\nInjection/centre/mois selon le taux de clic (à capacité actuelle) :")
-print(matC.sort_values("stock", ascending=False).to_string())
-
-# (3) injection TOTALE selon les 2 variables (taux de clic × appels/jour)
-APPELS_GRID = [2, 3, 4, 5]
-gridT = pd.DataFrame(
-    {f"{a}/j": [round(len(stock) * a * JOURS_MOIS / r) for r in TAUX_CLIC] for a in APPELS_GRID},
-    index=[f"clic {r:.0%}" for r in TAUX_CLIC])
-print(f"\nInjection TOTALE à prévoir ({len(stock)} centres) selon taux de clic × appels/jour :")
-print(gridT.to_string())
-
-# Graphe : injection reco par centre (nommé), annoté du nb de mois de pool
-fig, ax = plt.subplots(figsize=(10, max(3, 0.5 * len(reco))))
-r2 = reco.sort_values("injection_reco_mois")
-ax.barh(r2.index.astype(str), r2["injection_reco_mois"].values, color="#1E6FA8")
-for i, (v, m, al) in enumerate(zip(r2["injection_reco_mois"], r2["mois_de_pool"], r2["alerte"])):
-    ax.text(v, i, f"  {v:,}  ({m} mois de pool)", va="center", fontsize=9,
-            color="#C0492F" if al != "OK" else "#334155")
-ax.set_title(f"Injection recommandée / centre / mois — clic {TAUX_CIBLE:.0%}, "
-             f"{APPELS_JOUR if not isinstance(APPELS_JOUR, dict) else 'variable'} appels/j")
-ax.set_xlabel("clients à injecter / mois"); ax.set_ylabel("centre (CCI)")
-plt.tight_layout(); plt.show()
-
-# Export pour le mail au manager : reco.to_csv("recommandation_injection_par_centre.csv")
-
-
-# ──── CELLULE 7 · SOUTENABILITÉ — injection vs acquisitions mensuelles ───────
-# En campagne permanente, on ne peut pas injecter durablement plus vite que le
-# centre ne se réalimente en nouveaux clients. On confronte donc l'injection
-# idéale au rythme d'acquisition mensuel (à estimer, par centre).
-#
-# → REMPLIS ACQ_MENSUELLE : nouveaux clients / mois / centre. Remplace chaque
-#   None par ton estimation. (Astuce : la ligne ci-dessous régénère le squelette
-#   avec tes CCI si tu veux le re-copier.)
-# import pprint; print("ACQ_MENSUELLE ="); pprint.pprint({str(c): None for c in stock.index})
-
-ACQ_MENSUELLE = {str(c): None for c in stock.index}      # ← À REMPLIR (remplace les None)
-
-# alignement robuste dict(str) -> centres
-acq = pd.Series({k: ACQ_MENSUELLE.get(str(k), np.nan) for k in stock.index}, dtype="float")
-
-out = reco.copy()
-out["acq_mensuelle"]        = acq                                          # ta saisie
-out["injection_ideale"]     = out["injection_reco_mois"]                   # = capacité / taux_clic
-out["injection_soutenable"] = np.minimum(out["injection_ideale"], out["acq_mensuelle"])
-out["deficit_mensuel"]      = (out["injection_ideale"] - out["acq_mensuelle"]).clip(lower=0)
-out["runway_mois"]          = np.where(out["deficit_mensuel"] > 0,
-                                       (out["stock_attaché"] / out["deficit_mensuel"]).round(1),
-                                       np.nan)   # NaN = pas de déficit (autosuffisant)
+# (2) au taux cible : reco bornée par l'acquisition (soutenabilité)
+core["inj_cible"]      = (capm / TAUX_CIBLE).round()
+core["inj_soutenable"] = np.minimum(core["inj_cible"], core["acq_mois"])
+core["deficit_mois"]   = (core["inj_cible"] - core["acq_mois"]).clip(lower=0)
+core["runway_mois"]    = np.where(core["deficit_mois"] > 0,
+                                  (core["stock"] / core["deficit_mois"]).round(1), np.nan)
 def _verdict(row):
-    if pd.isna(row["acq_mensuelle"]):   return "à renseigner"
-    if row["deficit_mensuel"] <= 0:     return "autosuffisant"
-    return f"{row['runway_mois']:.0f} mois avant sous-alim."
-out["verdict"] = out.apply(_verdict, axis=1)
+    if pd.isna(row["acq_mois"]):   return "acq. à renseigner"
+    if row["deficit_mois"] <= 0:   return "autosuffisant"
+    return f"acq. insuffisante — tient {row['runway_mois']:.0f} mois sur stock"
+core["verdict"] = core.apply(_verdict, axis=1)
+cols2 = ["stock", "acq_mois", "inj_cible", "inj_soutenable", "deficit_mois", "runway_mois", "verdict"]
+print(f"\n(2) RECO au taux cible {TAUX_CIBLE:.0%} — injection bornée par l'acquisition :")
+print(core[cols2].to_string())
+print("\n  inj_cible      = injection idéale (occupe la capacité, tient le 24 h)")
+print("  inj_soutenable = ce qu'on tient DURABLEMENT = min(idéale, acquisitions/mois)")
+print("  runway_mois    = mois avant d'épuiser le stock si on injecte à l'idéale")
 
-COLS = ["stock_attaché", "acq_mensuelle", "injection_ideale", "injection_soutenable",
-        "deficit_mensuel", "runway_mois", "verdict"]
-print("════ SOUTENABILITÉ PAR CENTRE (remplis ACQ_MENSUELLE d'abord) ════")
-print(out[COLS].to_string())
-print("\nLecture des colonnes :")
-print("  injection_ideale     = clients/mois pour occuper le centre (capacité / taux de clic)")
-print("  injection_soutenable = ce qu'on peut tenir DURABLEMENT = min(idéale, acquisitions/mois)")
-print("  deficit_mensuel      = clients/mois puisés dans le stock au-delà des acquisitions")
-print("  runway_mois          = mois avant d'épuiser le stock initial à l'injection idéale")
-print("  verdict              = 'autosuffisant' si acquisitions >= idéale, sinon durée de tenue")
+# Graphe : injection cible vs acquisition, par centre (nommé)
+fig, ax = plt.subplots(figsize=(10, max(3, 0.55 * len(core))))
+y = np.arange(len(core)); c2 = core.iloc[::-1]
+ax.barh(y - 0.2, c2["inj_cible"],  height=0.4, color="#1E6FA8", label="injection idéale")
+ax.barh(y + 0.2, c2["acq_mois"],   height=0.4, color="#0F8A5F", label="acquisition/mois")
+ax.set_yticks(y); ax.set_yticklabels(c2.index.astype(str))
+ax.set_xlabel("clients / mois"); ax.set_ylabel("centre (CCI)")
+ax.set_title(f"Injection idéale vs acquisition par centre (clic {TAUX_CIBLE:.0%}, "
+             f"jusqu'à {int(np.nanmax(apj))} appels/j)")
+ax.legend(); plt.tight_layout(); plt.show()
+# Export : core.to_csv("injection_optimale_par_centre.csv")
 
-# Export : out[COLS].to_csv("soutenabilite_par_centre.csv")
 
-
-# ──── CELLULE 8 · RÉCAP TEXTE — une phrase par centre (à coller dans le mail) ─
-# Synthétise cellules 6 + 7 en une recommandation lisible par centre.
+# ─────────────── CELLULE 3 · RÉCAP MAIL — une phrase par centre ─────────────
 lignes = []
-for cci, row in out.iterrows():
-    ideal = int(row["injection_ideale"]); stk = int(row["stock_attaché"]); acqv = row["acq_mensuelle"]
-    if pd.isna(acqv):
-        lignes.append(f"• Centre {cci} : injecter ~{ideal} clients/mois (idéal, clic {TAUX_CIBLE:.0%}). "
-                      f"Soutenabilité à confirmer — acquisitions mensuelles non renseignées.")
-    elif row["deficit_mensuel"] <= 0:
-        lignes.append(f"• Centre {cci} : injecter ~{ideal} clients/mois — AUTOSUFFISANT "
-                      f"(acquisitions {int(acqv)}/mois couvrent le besoin).")
+for cci, row in core.iterrows():
+    ideal = int(row["inj_cible"]); stk = int(row["stock"]); a = row["acq_mois"]
+    if pd.isna(a):
+        lignes.append(f"• {cci} : injecter ~{ideal} clients/mois (idéal, clic {TAUX_CIBLE:.0%}, "
+                      f"{int(row['appels_j'])} appels/j). Soutenabilité à confirmer (acquisition non renseignée).")
+    elif row["deficit_mois"] <= 0:
+        lignes.append(f"• {cci} : injecter ~{ideal} clients/mois — AUTOSUFFISANT "
+                      f"(acquisition {int(a)}/mois couvre le besoin).")
     else:
-        sout = int(row["injection_soutenable"]); rw = row["runway_mois"]
-        lignes.append(f"• Centre {cci} : viser ~{sout} clients/mois en rythme permanent (= son acquisition). "
-                      f"L'idéal ({ideal}/mois) viderait son stock de {stk:,} en ~{rw:.0f} mois "
-                      f"→ booster l'acquisition ou réallouer du stock.")
+        sout = int(row["inj_soutenable"]); rw = row["runway_mois"]
+        lignes.append(f"• {cci} : idéal {ideal}/mois mais acquisition seulement {int(a)}/mois → "
+                      f"soutenable ~{sout}/mois ; le stock de {stk:,} tient ~{rw:.0f} mois à l'idéal, "
+                      f"ensuite booster l'acquisition ou réallouer.")
 recap = "\n".join(lignes)
-
-print("════════════════════ RÉCAP POUR LE MAIL ════════════════════\n")
-print(f"Hypothèses : engagement rappel < 24 h · taux de clic {TAUX_CIBLE:.0%} · {JOURS_MOIS} j "
-      f"ouvrés/mois · {APPELS_JOUR if not isinstance(APPELS_JOUR, dict) else 'capacité variable'} "
-      f"appels/jour.\n")
+print(f"════ RÉCAP (clic {TAUX_CIBLE:.0%}, rappel < 24 h) ════\n")
 print(recap)
-
-n_missing = int(out["acq_mensuelle"].isna().sum())
-tot_ideal = int(out["injection_ideale"].sum())
-if n_missing:
-    print(f"\nInjection totale IDÉALE : {tot_ideal:,} clients/mois. "
-          f"(Total soutenable calculable une fois les {n_missing} acquisition(s) renseignée(s).)")
-else:
-    tot_sout = int(np.nansum(out["injection_soutenable"]))
-    print(f"\nInjection totale — idéale {tot_ideal:,}/mois · soutenable {tot_sout:,}/mois.")
-
 # Export : open("recap_mail.txt", "w", encoding="utf-8").write(recap)
-
-
-# ──── CELLULE 9 · GRILLES CROISÉES  taux de clic × appels/jour ────────────────
-TAUX_CLIC   = [0.02, 0.03, 0.05, 0.07]
-APPELS_GRID = [2, 3, 4, 5]
-JOURS_MOIS  = 20
-
-# (A) INJECTION À CIBLER /centre/mois = appels/j × JOURS_MOIS / taux_clic
-#     (c'est le PLAFOND qui tient le 24 h). Ne dépend PAS du stock → identique
-#     pour chaque centre à capacité égale.
-injA = pd.DataFrame(
-    {f"{a} app./j": [round(a * JOURS_MOIS / r) for r in TAUX_CLIC] for a in APPELS_GRID},
-    index=[f"clic {r:.0%}" for r in TAUX_CLIC])
-injA.index.name = "taux clic"
-print("(A) INJECTION à cibler par centre et par mois = f(taux de clic × appels/jour)")
-print(f"    identique pour chaque centre à capacité égale · JOURS_MOIS={JOURS_MOIS} :")
-print(injA.to_string()); print()
-
-# (B) CLICS ATTENDUS PAR CENTRE = stock × taux_clic  (dépend du stock du centre)
-clicsB = pd.DataFrame({f"clic {r:.0%}": (stock * r).round().astype(int) for r in TAUX_CLIC})
-clicsB.insert(0, "stock", stock)
-print("(B) Clics attendus par centre selon le taux de clic (= stock × taux) :")
-print(clicsB.sort_values("stock", ascending=False).to_string()); print()
-
-# Heatmap de la grille (A)
-fig, ax = plt.subplots(figsize=(7, 4.5))
-im = ax.imshow(injA.values, cmap="YlGnBu", aspect="auto")
-ax.set_xticks(range(len(APPELS_GRID))); ax.set_xticklabels([f"{a}/j" for a in APPELS_GRID])
-ax.set_yticks(range(len(TAUX_CLIC)));   ax.set_yticklabels([f"{r:.0%}" for r in TAUX_CLIC])
-for i in range(len(TAUX_CLIC)):
-    for j in range(len(APPELS_GRID)):
-        v = injA.values[i, j]
-        ax.text(j, i, f"{v:,}", ha="center", va="center",
-                color="white" if v > injA.values.max() * .55 else "black", fontsize=10)
-ax.set_xlabel("appels / jour"); ax.set_ylabel("taux de clic")
-ax.set_title(f"Injection à cibler /centre/mois pour tenir le 24 h (JOURS_MOIS={JOURS_MOIS})")
-plt.tight_layout(); plt.show()
-
-# Export : injA.to_csv("grille_injection.csv") ; clicsB.to_csv("clics_par_centre.csv")
-
-
-# ──── CELLULE 10 · RÉPARTITION du stock 10k pour tenir le 24 h ────────────────
-# Objectif : découper le stock total sur les centres pour que CHAQUE cliqueur
-# soit appelé sous 24 h. Capacités égales → répartition ÉGALE = optimale.
-# On diffuse la bannière sur ~1 mois ; clics/mois/centre = (stock/centre) × clic.
-#   24 h tenu  ⇔  clics/mois/centre <= capacité/mois = appels/j × JOURS_MOIS.
-# Scénarios imbriqués : taux de clic, puis appels/jour (max 5).
-STOCK_TOTAL = int(stock.sum())     # ≈ 10 000  (ou fixe : STOCK_TOTAL = 10000)
-N_CENTRES   = len(stock)           # ou 6
-JOURS_MOIS  = 20
-TAUX_CLIC   = [0.02, 0.03, 0.05, 0.07]
-APPELS_GRID = [2, 3, 4, 5]
-part_egale  = STOCK_TOTAL / N_CENTRES
-
-print(f"Stock total {STOCK_TOTAL:,} réparti également sur {N_CENTRES} centres "
-      f"= {round(part_egale):,} clients/centre · JOURS_MOIS={JOURS_MOIS}\n")
-
-# (A) appels/jour requis par centre selon le taux de clic (répartition égale)
-req = pd.DataFrame({
-    "taux_clic":             [f"{r:.0%}" for r in TAUX_CLIC],
-    "clients_par_centre":    [round(part_egale)] * len(TAUX_CLIC),
-    "clics_par_centre_mois": [round(part_egale * r) for r in TAUX_CLIC],
-    "appels_j_requis_24h":   [int(np.ceil(part_egale * r / JOURS_MOIS)) for r in TAUX_CLIC],
-    "faisable_max_5j":       ["oui" if part_egale * r / JOURS_MOIS <= 5 else "NON (>5/j)"
-                              for r in TAUX_CLIC],
-})
-print("(A) Appels/jour requis PAR CENTRE pour tenir le 24 h (répartition égale) :")
-print(req.to_string(index=False)); print()
-
-# (B) grille croisée charge % = clics / capacité, par (taux de clic × appels/jour)
-charge = pd.DataFrame(
-    {f"{a} app./j": [round(part_egale * r / (a * JOURS_MOIS) * 100) for r in TAUX_CLIC]
-     for a in APPELS_GRID},
-    index=[f"clic {r:.0%}" for r in TAUX_CLIC])
-charge.index.name = "taux clic"
-print("(B) Charge % par centre (répartition égale) — > 100 % = 24 h cassé :")
-print(charge.to_string()); print()
-
-# (C) stock MAX appelable/mois (24 h) tous centres, et mois pour écouler le stock
-capC = [{"appels_j": a, "taux_clic": f"{r:.0%}",
-         "mois_pour_ecouler": round(STOCK_TOTAL / (N_CENTRES * a * JOURS_MOIS / r), 1)}
-        for a in APPELS_GRID for r in TAUX_CLIC]
-piv = pd.DataFrame(capC).pivot(index="taux_clic", columns="appels_j", values="mois_pour_ecouler")
-print("(C) Mois pour écouler tout le stock en tenant le 24 h (≤ 1 = faisable en 1 mois) :")
-print(piv.to_string()); print()
-
-# Heatmap de la charge (B)
-fig, ax = plt.subplots(figsize=(7, 4.5))
-im = ax.imshow(charge.values, cmap="RdYlGn_r", aspect="auto", vmin=0, vmax=200)
-ax.set_xticks(range(len(APPELS_GRID))); ax.set_xticklabels([f"{a}/j" for a in APPELS_GRID])
-ax.set_yticks(range(len(TAUX_CLIC)));   ax.set_yticklabels([f"{r:.0%}" for r in TAUX_CLIC])
-for i in range(len(TAUX_CLIC)):
-    for j in range(len(APPELS_GRID)):
-        v = charge.values[i, j]
-        ax.text(j, i, f"{v}%", ha="center", va="center", fontsize=10,
-                color="white" if (v > 130 or v < 45) else "black")
-ax.set_xlabel("appels / jour"); ax.set_ylabel("taux de clic")
-ax.set_title(f"Charge/centre, répartition égale de {STOCK_TOTAL:,} — vert = 24 h tenu")
-plt.tight_layout(); plt.show()
-
-# Export : req.to_csv("appels_requis_par_clic.csv") ; charge.to_csv("charge_repartition_egale.csv")
