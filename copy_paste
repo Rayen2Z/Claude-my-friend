@@ -430,3 +430,65 @@ ax.set_title(f"Injection à cibler /centre/mois pour tenir le 24 h (JOURS_MOIS={
 plt.tight_layout(); plt.show()
 
 # Export : injA.to_csv("grille_injection.csv") ; clicsB.to_csv("clics_par_centre.csv")
+
+
+# ──── CELLULE 10 · RÉPARTITION du stock 10k pour tenir le 24 h ────────────────
+# Objectif : découper le stock total sur les centres pour que CHAQUE cliqueur
+# soit appelé sous 24 h. Capacités égales → répartition ÉGALE = optimale.
+# On diffuse la bannière sur ~1 mois ; clics/mois/centre = (stock/centre) × clic.
+#   24 h tenu  ⇔  clics/mois/centre <= capacité/mois = appels/j × JOURS_MOIS.
+# Scénarios imbriqués : taux de clic, puis appels/jour (max 5).
+STOCK_TOTAL = int(stock.sum())     # ≈ 10 000  (ou fixe : STOCK_TOTAL = 10000)
+N_CENTRES   = len(stock)           # ou 6
+JOURS_MOIS  = 20
+TAUX_CLIC   = [0.02, 0.03, 0.05, 0.07]
+APPELS_GRID = [2, 3, 4, 5]
+part_egale  = STOCK_TOTAL / N_CENTRES
+
+print(f"Stock total {STOCK_TOTAL:,} réparti également sur {N_CENTRES} centres "
+      f"= {round(part_egale):,} clients/centre · JOURS_MOIS={JOURS_MOIS}\n")
+
+# (A) appels/jour requis par centre selon le taux de clic (répartition égale)
+req = pd.DataFrame({
+    "taux_clic":             [f"{r:.0%}" for r in TAUX_CLIC],
+    "clients_par_centre":    [round(part_egale)] * len(TAUX_CLIC),
+    "clics_par_centre_mois": [round(part_egale * r) for r in TAUX_CLIC],
+    "appels_j_requis_24h":   [int(np.ceil(part_egale * r / JOURS_MOIS)) for r in TAUX_CLIC],
+    "faisable_max_5j":       ["oui" if part_egale * r / JOURS_MOIS <= 5 else "NON (>5/j)"
+                              for r in TAUX_CLIC],
+})
+print("(A) Appels/jour requis PAR CENTRE pour tenir le 24 h (répartition égale) :")
+print(req.to_string(index=False)); print()
+
+# (B) grille croisée charge % = clics / capacité, par (taux de clic × appels/jour)
+charge = pd.DataFrame(
+    {f"{a} app./j": [round(part_egale * r / (a * JOURS_MOIS) * 100) for r in TAUX_CLIC]
+     for a in APPELS_GRID},
+    index=[f"clic {r:.0%}" for r in TAUX_CLIC])
+charge.index.name = "taux clic"
+print("(B) Charge % par centre (répartition égale) — > 100 % = 24 h cassé :")
+print(charge.to_string()); print()
+
+# (C) stock MAX appelable/mois (24 h) tous centres, et mois pour écouler le stock
+capC = [{"appels_j": a, "taux_clic": f"{r:.0%}",
+         "mois_pour_ecouler": round(STOCK_TOTAL / (N_CENTRES * a * JOURS_MOIS / r), 1)}
+        for a in APPELS_GRID for r in TAUX_CLIC]
+piv = pd.DataFrame(capC).pivot(index="taux_clic", columns="appels_j", values="mois_pour_ecouler")
+print("(C) Mois pour écouler tout le stock en tenant le 24 h (≤ 1 = faisable en 1 mois) :")
+print(piv.to_string()); print()
+
+# Heatmap de la charge (B)
+fig, ax = plt.subplots(figsize=(7, 4.5))
+im = ax.imshow(charge.values, cmap="RdYlGn_r", aspect="auto", vmin=0, vmax=200)
+ax.set_xticks(range(len(APPELS_GRID))); ax.set_xticklabels([f"{a}/j" for a in APPELS_GRID])
+ax.set_yticks(range(len(TAUX_CLIC)));   ax.set_yticklabels([f"{r:.0%}" for r in TAUX_CLIC])
+for i in range(len(TAUX_CLIC)):
+    for j in range(len(APPELS_GRID)):
+        v = charge.values[i, j]
+        ax.text(j, i, f"{v}%", ha="center", va="center", fontsize=10,
+                color="white" if (v > 130 or v < 45) else "black")
+ax.set_xlabel("appels / jour"); ax.set_ylabel("taux de clic")
+ax.set_title(f"Charge/centre, répartition égale de {STOCK_TOTAL:,} — vert = 24 h tenu")
+plt.tight_layout(); plt.show()
+
+# Export : req.to_csv("appels_requis_par_clic.csv") ; charge.to_csv("charge_repartition_egale.csv")
