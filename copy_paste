@@ -70,17 +70,21 @@ core["inj_soutenable"] = np.minimum(core["inj_cible"], core["acq_mois"])
 core["deficit_mois"]   = (core["inj_cible"] - core["acq_mois"]).clip(lower=0)
 core["runway_mois"]    = np.where(core["deficit_mois"] > 0,
                                   (core["stock"] / core["deficit_mois"]).round(1), np.nan)
+core["mois_ecoulement_stock"] = (core["stock"] / core["inj_cible"]).round(1)   # dépend du stock
 def _verdict(row):
     if pd.isna(row["acq_mois"]):   return "acq. à renseigner"
     if row["deficit_mois"] <= 0:   return "autosuffisant"
     return f"acq. insuffisante — tient {row['runway_mois']:.0f} mois sur stock"
 core["verdict"] = core.apply(_verdict, axis=1)
-cols2 = ["stock", "acq_mois", "inj_cible", "inj_soutenable", "deficit_mois", "runway_mois", "verdict"]
+cols2 = ["stock", "acq_mois", "inj_cible", "inj_soutenable", "mois_ecoulement_stock",
+         "deficit_mois", "runway_mois", "verdict"]
 print(f"\n(2) RECO au taux cible {TAUX_CIBLE:.0%} — injection bornée par l'acquisition :")
 print(core[cols2].to_string())
-print("\n  inj_cible      = injection idéale (occupe la capacité, tient le 24 h)")
-print("  inj_soutenable = ce qu'on tient DURABLEMENT = min(idéale, acquisitions/mois)")
-print("  runway_mois    = mois avant d'épuiser le stock si on injecte à l'idéale")
+print("\n  inj_cible      = PLAFOND capacité (identique à capacité égale : le tel. est le goulot,")
+print("                   pas le stock — injecter selon le stock casserait le 24 h des gros centres)")
+print("  inj_soutenable = ce qu'on tient DURABLEMENT = min(idéale, acquisitions/mois)  ← dynamique/centre")
+print("  mois_ecoulement_stock = mois pour montrer la bannière à tout le stock (dépend du stock)")
+print("  runway_mois    = mois avant d'épuiser le stock si on injecte à l'idéale > acquisition")
 
 # Graphe : injection cible vs acquisition, par centre (nommé)
 fig, ax = plt.subplots(figsize=(10, max(3, 0.55 * len(core))))
