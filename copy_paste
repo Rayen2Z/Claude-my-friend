@@ -391,3 +391,42 @@ else:
     print(f"\nInjection totale — idéale {tot_ideal:,}/mois · soutenable {tot_sout:,}/mois.")
 
 # Export : open("recap_mail.txt", "w", encoding="utf-8").write(recap)
+
+
+# ──── CELLULE 9 · GRILLES CROISÉES  taux de clic × appels/jour ────────────────
+TAUX_CLIC   = [0.02, 0.03, 0.05, 0.07]
+APPELS_GRID = [2, 3, 4, 5]
+JOURS_MOIS  = 20
+
+# (A) INJECTION À CIBLER /centre/mois = appels/j × JOURS_MOIS / taux_clic
+#     (c'est le PLAFOND qui tient le 24 h). Ne dépend PAS du stock → identique
+#     pour chaque centre à capacité égale.
+injA = pd.DataFrame(
+    {f"{a} app./j": [round(a * JOURS_MOIS / r) for r in TAUX_CLIC] for a in APPELS_GRID},
+    index=[f"clic {r:.0%}" for r in TAUX_CLIC])
+injA.index.name = "taux clic"
+print("(A) INJECTION à cibler par centre et par mois = f(taux de clic × appels/jour)")
+print(f"    identique pour chaque centre à capacité égale · JOURS_MOIS={JOURS_MOIS} :")
+print(injA.to_string()); print()
+
+# (B) CLICS ATTENDUS PAR CENTRE = stock × taux_clic  (dépend du stock du centre)
+clicsB = pd.DataFrame({f"clic {r:.0%}": (stock * r).round().astype(int) for r in TAUX_CLIC})
+clicsB.insert(0, "stock", stock)
+print("(B) Clics attendus par centre selon le taux de clic (= stock × taux) :")
+print(clicsB.sort_values("stock", ascending=False).to_string()); print()
+
+# Heatmap de la grille (A)
+fig, ax = plt.subplots(figsize=(7, 4.5))
+im = ax.imshow(injA.values, cmap="YlGnBu", aspect="auto")
+ax.set_xticks(range(len(APPELS_GRID))); ax.set_xticklabels([f"{a}/j" for a in APPELS_GRID])
+ax.set_yticks(range(len(TAUX_CLIC)));   ax.set_yticklabels([f"{r:.0%}" for r in TAUX_CLIC])
+for i in range(len(TAUX_CLIC)):
+    for j in range(len(APPELS_GRID)):
+        v = injA.values[i, j]
+        ax.text(j, i, f"{v:,}", ha="center", va="center",
+                color="white" if v > injA.values.max() * .55 else "black", fontsize=10)
+ax.set_xlabel("appels / jour"); ax.set_ylabel("taux de clic")
+ax.set_title(f"Injection à cibler /centre/mois pour tenir le 24 h (JOURS_MOIS={JOURS_MOIS})")
+plt.tight_layout(); plt.show()
+
+# Export : injA.to_csv("grille_injection.csv") ; clicsB.to_csv("clics_par_centre.csv")
