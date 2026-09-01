@@ -41,12 +41,13 @@ print(f"\nStock total : {stock.sum():,} clients sur {len(stock)} centres")
 print("\nTop 10 :"); print(stock.head(10))
 print("\nBottom 10 :"); print(stock.tail(10))
 
-fig, ax = plt.subplots(1, 2, figsize=(13, 4.6))
-ax[0].hist(stock.values, bins=30, color="#1E6FA8", edgecolor="white")
-ax[0].set_title("Distribution du nb de clients ciblés par centre")
-ax[0].set_xlabel("clients par centre"); ax[0].set_ylabel("nb de centres")
-stock.head(15).iloc[::-1].plot.barh(ax=ax[1], color="#0F8A5F")
-ax[1].set_title("Top 15 centres par stock"); ax[1].set_xlabel("clients")
+fig, ax = plt.subplots(figsize=(10, max(3, 0.5 * len(stock))))
+s2 = stock.iloc[::-1]                                   # petit -> grand pour la lecture
+ax.barh(s2.index.astype(str), s2.values, color="#1E6FA8")
+for i, v in enumerate(s2.values):
+    ax.text(v, i, f" {v:,}", va="center", fontsize=9)
+ax.set_title("Nombre de clients ciblés par centre")
+ax.set_xlabel("clients"); ax.set_ylabel("centre (CCI)")
 plt.tight_layout(); plt.show()
 
 
@@ -160,7 +161,8 @@ fig, ax = plt.subplots(figsize=(11, 5))
 ax.bar(range(len(ds)), ds["charge_%"].values, color=[COLOR[e] for e in ds["etat"]])
 ax.axhline(100, ls="--", color="#C0492F", lw=1.3, label="surcharge (100 %)")
 ax.axhline(occ_thr, ls="--", color="#E0912A", lw=1.3, label=f"sous-charge (> {IDLE_ALERT} j creux)")
-ax.set_xlabel("centres (triés par charge)"); ax.set_ylabel("charge % (demande / capacité)")
+ax.set_xticks(range(len(ds))); ax.set_xticklabels(ds.index.astype(str), rotation=45, ha="right")
+ax.set_xlabel("centre (CCI)"); ax.set_ylabel("charge % (demande / capacité)")
 ax.set_title(f"Charge des centres — surcharge ↑ / sous-alimenté ↓  "
              f"(clic {CLICK_RATE:.0%}, {CALLS_PER_DAY} appels/j, {CAMPAIGN_DAYS} j)")
 ax.legend(); plt.tight_layout(); plt.show()
@@ -234,3 +236,67 @@ ax.set_title(f"Injection idéale par centre pour occuper {cap_mois} appels/mois"
 ax.legend(); plt.tight_layout(); plt.show()
 
 # Export optionnel : reco.to_csv("injection_ideale.csv")
+
+
+# ──── CELLULE 6 · RECOMMANDATION FINALE — injection par centre ───────────────
+# Injection reco / centre / mois = capacité_mois / taux_clic
+#   capacité_mois = appels/jour × jours/mois   (fonction des 2 variables)
+# APPELS_JOUR : scalaire (même capacité partout) OU dict {CCI: appels/j}.
+TAUX_CIBLE  = 0.05
+APPELS_JOUR = 5          # ex. {"CENTRE_A": 5, "CENTRE_B": 3, ...} si capacités différentes
+JOURS_MOIS  = 20
+MARGE       = 0.0        # marge de sécurité optionnelle (0.15 = +15 % d'injection)
+TAUX_CLIC   = [0.02, 0.03, 0.05, 0.07]     # éventail pour les tableaux de sensibilité
+
+# capacité mensuelle par centre
+if isinstance(APPELS_JOUR, dict):
+    apj = pd.Series(APPELS_JOUR).reindex(stock.index)
+    if apj.isna().any():
+        print("⚠ centres sans 'appels/j' défini (→ 0) :", list(apj[apj.isna()].index))
+    apj = apj.fillna(0)
+else:
+    apj = pd.Series(APPELS_JOUR, index=stock.index)
+cap = (apj * JOURS_MOIS).astype(int)
+
+# (1) tableau de reco au scénario cible
+reco = pd.DataFrame({
+    "stock_attaché":       stock,
+    "appels_jour":         apj.astype(int),
+    "capacite_mois":       cap,
+    "injection_reco_mois": (cap / TAUX_CIBLE * (1 + MARGE)).round().astype(int),
+})
+reco["mois_de_pool"] = (reco["stock_attaché"] / reco["injection_reco_mois"]).round(1)
+reco["alerte"]       = np.where(reco["mois_de_pool"] < 1, "pool < 1 mois → réalimenter", "OK")
+reco = reco.sort_values("stock_attaché", ascending=False)
+print(f"════ RECOMMANDATION · clic {TAUX_CIBLE:.0%} · {JOURS_MOIS} j/mois · marge {MARGE:.0%} ════")
+print(reco.to_string())
+print(f"\n➜ Injection totale recommandée : {reco['injection_reco_mois'].sum():,} clients/mois "
+      f"sur {len(reco)} centres")
+
+# (2) injection PAR CENTRE selon le taux de clic (variable 1)
+matC = pd.DataFrame({f"clic {r:.0%}": (cap / r).round().astype(int) for r in TAUX_CLIC})
+matC.insert(0, "stock", stock)
+print("\nInjection/centre/mois selon le taux de clic (à capacité actuelle) :")
+print(matC.sort_values("stock", ascending=False).to_string())
+
+# (3) injection TOTALE selon les 2 variables (taux de clic × appels/jour)
+APPELS_GRID = [2, 3, 4, 5]
+gridT = pd.DataFrame(
+    {f"{a}/j": [round(len(stock) * a * JOURS_MOIS / r) for r in TAUX_CLIC] for a in APPELS_GRID},
+    index=[f"clic {r:.0%}" for r in TAUX_CLIC])
+print(f"\nInjection TOTALE à prévoir ({len(stock)} centres) selon taux de clic × appels/jour :")
+print(gridT.to_string())
+
+# Graphe : injection reco par centre (nommé), annoté du nb de mois de pool
+fig, ax = plt.subplots(figsize=(10, max(3, 0.5 * len(reco))))
+r2 = reco.sort_values("injection_reco_mois")
+ax.barh(r2.index.astype(str), r2["injection_reco_mois"].values, color="#1E6FA8")
+for i, (v, m, al) in enumerate(zip(r2["injection_reco_mois"], r2["mois_de_pool"], r2["alerte"])):
+    ax.text(v, i, f"  {v:,}  ({m} mois de pool)", va="center", fontsize=9,
+            color="#C0492F" if al != "OK" else "#334155")
+ax.set_title(f"Injection recommandée / centre / mois — clic {TAUX_CIBLE:.0%}, "
+             f"{APPELS_JOUR if not isinstance(APPELS_JOUR, dict) else 'variable'} appels/j")
+ax.set_xlabel("clients à injecter / mois"); ax.set_ylabel("centre (CCI)")
+plt.tight_layout(); plt.show()
+
+# Export pour le mail au manager : reco.to_csv("recommandation_injection_par_centre.csv")
