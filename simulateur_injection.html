@@ -1,0 +1,355 @@
+<title>Simulateur d'injection</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<style>
+:root{
+  --ground:#F5F7F9; --surface:#FFFFFF; --surface-2:#EDF1F5; --border:#DCE3EA;
+  --ink:#172430; --muted:#586977; --faint:#8794A2;
+  --accent:#0E7C86; --accent-ink:#0B5960; --accent-soft:#DBEDEE;
+  --good:#1E8E5E; --good-bg:#E4F3EB; --good-ink:#136B44;
+  --warn:#B27214; --warn-bg:#F8EDD8; --warn-ink:#8A5808;
+  --crit:#C0453B; --crit-bg:#F8E3E0; --crit-ink:#8F2E27;
+  --shadow:0 1px 2px rgba(20,40,60,.06),0 6px 20px rgba(20,40,60,.06);
+  --track:#D6DEE6;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --ground:#0E151B; --surface:#161F27; --surface-2:#1D2831; --border:#2A3844;
+  --ink:#E7EEF4; --muted:#9AA8B6; --faint:#6C7B89;
+  --accent:#33BFCA; --accent-ink:#82D9E0; --accent-soft:#123138;
+  --good:#45B682; --good-bg:#13291F; --good-ink:#7FD3AC;
+  --warn:#E0A63C; --warn-bg:#2C2411; --warn-ink:#E9C079;
+  --crit:#E06A5F; --crit-bg:#2D1714; --crit-ink:#EC998F;
+  --shadow:0 1px 2px rgba(0,0,0,.3),0 8px 26px rgba(0,0,0,.4);
+  --track:#2C3A46;
+}}
+:root[data-theme="dark"]{
+  --ground:#0E151B; --surface:#161F27; --surface-2:#1D2831; --border:#2A3844;
+  --ink:#E7EEF4; --muted:#9AA8B6; --faint:#6C7B89;
+  --accent:#33BFCA; --accent-ink:#82D9E0; --accent-soft:#123138;
+  --good:#45B682; --good-bg:#13291F; --good-ink:#7FD3AC;
+  --warn:#E0A63C; --warn-bg:#2C2411; --warn-ink:#E9C079;
+  --crit:#E06A5F; --crit-bg:#2D1714; --crit-ink:#EC998F;
+  --shadow:0 1px 2px rgba(0,0,0,.3),0 8px 26px rgba(0,0,0,.4);
+  --track:#2C3A46;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--ground);color:var(--ink);
+  font-family:"IBM Plex Sans",system-ui,-apple-system,sans-serif;
+  font-size:15px;line-height:1.5;-webkit-font-smoothing:antialiased;}
+.num{font-variant-numeric:tabular-nums lining-nums;}
+.wrap{max-width:1120px;margin:0 auto;padding:28px 22px 64px;}
+
+/* header */
+header{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:22px;}
+h1{font-family:"Fraunces",Georgia,serif;font-weight:600;font-size:clamp(26px,3.4vw,38px);
+  line-height:1.04;margin:0 0 6px;letter-spacing:-.01em;text-wrap:balance;}
+.lede{color:var(--muted);max-width:60ch;margin:0;font-size:14.5px;}
+.eyebrow{font-size:11.5px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--accent-ink);margin:0 0 8px;}
+.themebtn{flex:none;background:var(--surface);border:1px solid var(--border);color:var(--muted);
+  border-radius:9px;width:38px;height:38px;cursor:pointer;font-size:16px;box-shadow:var(--shadow);}
+.themebtn:hover{color:var(--accent-ink);border-color:var(--accent);}
+
+/* pinned scenario */
+.pinned{display:none;align-items:center;gap:12px;flex-wrap:wrap;
+  background:var(--accent-soft);border:1px solid var(--accent);border-radius:12px;
+  padding:12px 16px;margin-bottom:18px;}
+.pinned.on{display:flex;}
+.pinned b{color:var(--accent-ink);font-weight:600;}
+.pinned .restore{margin-left:auto;background:var(--accent);color:#fff;border:0;border-radius:8px;
+  padding:7px 12px;font:inherit;font-weight:600;font-size:13px;cursor:pointer;}
+.pinned .clear{background:none;border:0;color:var(--muted);cursor:pointer;font:inherit;font-size:13px;text-decoration:underline;}
+
+/* controls */
+.panel{background:var(--surface);border:1px solid var(--border);border-radius:16px;
+  box-shadow:var(--shadow);padding:20px 22px;position:sticky;top:12px;z-index:5;margin-bottom:22px;}
+.controls{display:grid;grid-template-columns:1fr 1fr auto auto;gap:26px 28px;align-items:end;}
+@media(max-width:760px){.controls{grid-template-columns:1fr 1fr;}}
+.ctrl label{display:block;font-size:12px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;
+  color:var(--muted);margin-bottom:9px;}
+.ctrl .val{font-family:"Fraunces",serif;font-weight:600;color:var(--accent-ink);
+  font-size:15px;margin-left:6px;}
+input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:6px;border-radius:99px;
+  background:linear-gradient(var(--accent),var(--accent)) 0/var(--fill,50%) 100% no-repeat,var(--track);
+  outline:none;margin:6px 0;}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:20px;height:20px;border-radius:50%;
+  background:var(--surface);border:3px solid var(--accent);cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.2);}
+input[type=range]::-moz-range-thumb{width:18px;height:18px;border-radius:50%;background:var(--surface);
+  border:3px solid var(--accent);cursor:pointer;}
+input[type=range]:focus-visible{box-shadow:0 0 0 3px var(--accent-soft);}
+.ticks{display:flex;justify-content:space-between;font-size:11px;color:var(--faint);margin-top:2px;}
+.daysbox{display:flex;flex-direction:column;}
+.daysbox input{width:76px;background:var(--surface-2);border:1px solid var(--border);color:var(--ink);
+  border-radius:8px;padding:8px 10px;font:inherit;font-weight:600;text-align:center;}
+.pinbtn{background:var(--ink);color:var(--ground);border:0;border-radius:10px;padding:11px 15px;
+  font:inherit;font-weight:600;font-size:13.5px;cursor:pointer;white-space:nowrap;height:fit-content;}
+.pinbtn:hover{background:var(--accent);color:#fff;}
+
+/* KPIs */
+.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:14px;}
+@media(max-width:760px){.kpis{grid-template-columns:repeat(2,1fr);}}
+.kpi{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:15px 16px;box-shadow:var(--shadow);}
+.kpi .k-lab{font-size:11.5px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);margin-bottom:8px;}
+.kpi .k-val{font-family:"Fraunces",serif;font-weight:600;font-size:30px;line-height:1;letter-spacing:-.01em;}
+.kpi .k-sub{font-size:12px;color:var(--faint);margin-top:6px;}
+.kpi.flag .k-val{color:var(--warn-ink);}
+.kpi.ok .k-val{color:var(--good-ink);}
+
+.summary{background:var(--surface-2);border-radius:12px;padding:14px 18px;margin-bottom:22px;
+  font-size:14.5px;color:var(--ink);}
+.summary b{color:var(--accent-ink);font-weight:600;}
+
+/* table */
+.tablecard{background:var(--surface);border:1px solid var(--border);border-radius:16px;box-shadow:var(--shadow);overflow:hidden;}
+.tabhead{display:flex;justify-content:space-between;align-items:center;padding:16px 20px 12px;}
+.tabhead h2{font-family:"Fraunces",serif;font-weight:600;font-size:18px;margin:0;}
+.tabhead .hint{font-size:12px;color:var(--faint);}
+.scroll{overflow-x:auto;}
+table{border-collapse:collapse;width:100%;min-width:720px;}
+th,td{padding:10px 12px;text-align:right;border-top:1px solid var(--border);white-space:nowrap;}
+th{font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);
+  text-align:right;background:var(--surface-2);position:sticky;top:0;}
+th:first-child,td:first-child{text-align:left;position:sticky;left:0;background:var(--surface);}
+th:first-child{background:var(--surface-2);}
+tbody tr:hover td{background:var(--surface-2);}
+tbody tr:hover td:first-child{background:var(--surface-2);}
+td.c{font-weight:600;}
+.cell-in{width:82px;background:var(--surface-2);border:1px solid var(--border);color:var(--ink);
+  border-radius:7px;padding:6px 8px;font:inherit;font-size:13.5px;text-align:right;font-variant-numeric:tabular-nums;}
+.cell-in:focus{outline:2px solid var(--accent);outline-offset:0;background:var(--surface);}
+.pill{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;
+  padding:3px 9px;border-radius:99px;white-space:nowrap;}
+.pill::before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor;}
+.pill.good{color:var(--good-ink);background:var(--good-bg);}
+.pill.warn{color:var(--warn-ink);background:var(--warn-bg);}
+.pill.none{color:var(--muted);background:var(--surface-2);}
+/* feed meter */
+.meter{display:inline-flex;align-items:center;gap:8px;}
+.meter .bar{width:66px;height:7px;border-radius:99px;background:var(--track);overflow:hidden;}
+.meter .fill{display:block;height:100%;border-radius:99px;}
+.meter .pct{font-size:12px;color:var(--muted);width:38px;text-align:right;}
+tfoot td{border-top:2px solid var(--border);font-weight:600;background:var(--surface-2);}
+tfoot td:first-child{background:var(--surface-2);}
+
+.foot{margin-top:22px;font-size:12.5px;color:var(--faint);line-height:1.6;}
+.foot b{color:var(--muted);font-weight:600;}
+kbd{font-family:"IBM Plex Sans";background:var(--surface-2);border:1px solid var(--border);
+  border-radius:5px;padding:1px 6px;font-size:12px;font-weight:600;color:var(--muted);}
+</style>
+
+<div class="wrap">
+  <header>
+    <div>
+      <p class="eyebrow">Campagne crédit immo · rappel &lt; 24 h</p>
+      <h1>Simulateur d'injection</h1>
+      <p class="lede">Ajustez le taux de clic et le nombre d'appels par jour : l'injection à faire
+        par centre, et la capacité de chaque centre à suivre, se recalculent en direct.</p>
+    </div>
+    <button class="themebtn" id="theme" title="Thème clair / sombre" aria-label="Basculer le thème">◐</button>
+  </header>
+
+  <div class="pinned" id="pinned">
+    <span>★ Scénario recommandé —</span>
+    <b id="pinnedTxt"></b>
+    <button class="restore" id="restore">Revenir à ce scénario</button>
+    <button class="clear" id="clearpin">retirer</button>
+  </div>
+
+  <div class="panel">
+    <div class="controls">
+      <div class="ctrl">
+        <label>Taux de clic <span class="val" id="clickVal">5,0 %</span></label>
+        <input type="range" id="click" min="1" max="10" step="0.5" value="5">
+        <div class="ticks"><span>1 %</span><span>10 %</span></div>
+      </div>
+      <div class="ctrl">
+        <label>Appels par jour / centre <span class="val" id="callsVal">5</span></label>
+        <input type="range" id="calls" min="1" max="5" step="1" value="5">
+        <div class="ticks"><span>1</span><span>5 (max)</span></div>
+      </div>
+      <div class="ctrl daysbox">
+        <label>Jours ouvrés / mois</label>
+        <input type="number" id="days" min="15" max="23" step="1" value="20">
+      </div>
+      <button class="pinbtn" id="pin">★ Épingler ce scénario</button>
+    </div>
+  </div>
+
+  <div class="kpis">
+    <div class="kpi"><div class="k-lab">Injection idéale / centre</div>
+      <div class="k-val num" id="kInj">—</div><div class="k-sub">clients à injecter / mois</div></div>
+    <div class="kpi"><div class="k-lab">Injection totale</div>
+      <div class="k-val num" id="kTot">—</div><div class="k-sub" id="kTotSub">tous centres / mois</div></div>
+    <div class="kpi"><div class="k-lab">Total soutenable</div>
+      <div class="k-val num" id="kSust">—</div><div class="k-sub">limité par l'acquisition</div></div>
+    <div class="kpi" id="kFlagCard"><div class="k-lab">Centres à surveiller</div>
+      <div class="k-val num" id="kFlag">—</div><div class="k-sub">acquisition insuffisante</div></div>
+  </div>
+
+  <p class="summary" id="summary"></p>
+
+  <div class="tablecard">
+    <div class="tabhead">
+      <h2>Détail par centre</h2>
+      <span class="hint">✎ stock &amp; acquisition éditables — cliquez une valeur</span>
+    </div>
+    <div class="scroll">
+      <table>
+        <thead><tr>
+          <th>Centre</th><th>Stock</th><th>Acquisition / mois</th>
+          <th>Injection idéale</th><th>Soutenable</th><th>Écoulement stock</th>
+          <th>Acq. suit ?</th><th>Statut</th>
+        </tr></thead>
+        <tbody id="tbody"></tbody>
+        <tfoot><tr>
+          <td>Total</td><td class="num" id="fStock"></td><td class="num" id="fAcq"></td>
+          <td class="num" id="fInj"></td><td class="num" id="fSust"></td>
+          <td colspan="3"></td>
+        </tr></tfoot>
+      </table>
+    </div>
+  </div>
+
+  <p class="foot">
+    <b>Modèle.</b> Capacité d'un centre = appels/jour × jours ouvrés (le téléphone est le goulot, pas le stock,
+    donc l'injection idéale est <b>plafonnée par la capacité</b> et identique à capacité égale).
+    Injection idéale = capacité ÷ taux de clic (elle sature la capacité tout en tenant le rappel &lt; 24 h).
+    <b>Soutenable</b> = min(idéale, acquisition/mois) : un centre dont l'acquisition ne suit pas vit sur son
+    stock — <b>Écoulement stock</b> indique en combien de mois il l'épuise à l'injection idéale.<br>
+    <b>Données.</b> Remplacez les 6 centres d'exemple par les vôtres dans le bloc <kbd>CENTERS</kbd> en tête de script
+    (ou éditez stock/acquisition directement dans le tableau). Tout est privé à votre navigateur.
+  </p>
+</div>
+
+<script>
+/* ============================================================================
+   DONNÉES — remplacez par vos centres réels (stock = clients rattachés ;
+   acq = acquisitions/mois estimées, ou null tant que non renseigné).
+   ============================================================================ */
+const CENTERS = [
+  { cci:"Centre A", stock:3200, acq:220 },
+  { cci:"Centre B", stock:2400, acq:150 },
+  { cci:"Centre C", stock:1800, acq:90  },
+  { cci:"Centre D", stock:1016, acq:70  },
+  { cci:"Centre E", stock:900,  acq:null },
+  { cci:"Centre F", stock:853,  acq:40  },
+];
+
+const state = { click:5, calls:5, days:20 };
+const $ = id => document.getElementById(id);
+const fr = n => (n==null||isNaN(n)) ? "—" : Math.round(n).toLocaleString("fr-FR");
+const pct1 = n => n.toLocaleString("fr-FR",{minimumFractionDigits:1,maximumFractionDigits:1});
+
+function compute(){
+  const rate = state.click/100, cap = state.calls*state.days;
+  const injIdeal = cap/rate;
+  return CENTERS.map(c=>{
+    const acq = (c.acq===null||c.acq===""||isNaN(c.acq))?null:Number(c.acq);
+    const sust = acq==null?null:Math.min(injIdeal,acq);
+    const deficit = acq==null?null:Math.max(injIdeal-acq,0);
+    const runway = (deficit&&deficit>0)? c.stock/deficit : null;
+    const ecoul = injIdeal>0? c.stock/injIdeal : null;
+    const feed = acq==null?null:Math.min(acq/injIdeal,1);      // 0..1
+    let status;
+    if(acq==null) status={cls:"none",txt:"à renseigner"};
+    else if(deficit<=0) status={cls:"good",txt:"autosuffisant"};
+    else status={cls:"warn",txt:"vit sur stock"};
+    return {...c,acq,cap,injIdeal,sust,ecoul,runway,feed,status};
+  });
+}
+
+function render(){
+  const rate=state.click/100, cap=state.calls*state.days, injIdeal=cap/rate;
+  $("clickVal").textContent = pct1(state.click)+" %";
+  $("callsVal").textContent = state.calls;
+  $("click").style.setProperty("--fill",((state.click-1)/9*100)+"%");
+  $("calls").style.setProperty("--fill",((state.calls-1)/4*100)+"%");
+
+  const rows = compute();
+  const N = rows.length;
+  $("kInj").textContent = fr(injIdeal);
+  $("kTot").textContent = fr(injIdeal*N);
+  $("kTotSub").textContent = `${N} centres · ${state.calls} appels/j`;
+  const knownS = rows.filter(r=>r.sust!=null);
+  const sumS = knownS.reduce((a,r)=>a+r.sust,0);
+  const nMissing = N-knownS.length;
+  $("kSust").textContent = fr(sumS) + (nMissing?` +${nMissing}?`:"");
+  const flags = rows.filter(r=>r.status.cls==="warn").length;
+  $("kFlag").textContent = flags;
+  $("kFlagCard").className = "kpi "+(flags?"flag":"ok");
+
+  $("summary").innerHTML =
+    `À <b>${pct1(state.click)} %</b> de clic et <b>${state.calls} appels/jour</b>, injecter `+
+    `<b>${fr(injIdeal)}</b> clients/mois par centre pour saturer la capacité en tenant le rappel &lt; 24 h. `+
+    (flags? `<b>${flags}</b> centre${flags>1?"s":""} sur ${N} ${flags>1?"n'ont":"n'a"} pas assez d'acquisition pour suivre — ils vivront sur leur stock.`
+          : `Tous les centres renseignés suivent avec leur acquisition.`);
+
+  const tb=$("tbody"); tb.innerHTML="";
+  rows.forEach((r,i)=>{
+    const tr=document.createElement("tr");
+    const feedPct = r.feed==null?null:Math.round(r.feed*100);
+    const feedCol = r.feed==null?"var(--track)":(r.feed>=1?"var(--good)":"var(--warn)");
+    tr.innerHTML=
+      `<td class="c">${r.cci}</td>`+
+      `<td><input class="cell-in num" data-i="${i}" data-f="stock" value="${r.stock}"></td>`+
+      `<td><input class="cell-in num" data-i="${i}" data-f="acq" value="${r.acq==null?"":r.acq}" placeholder="—"></td>`+
+      `<td class="num c">${fr(r.injIdeal)}</td>`+
+      `<td class="num">${r.sust==null?"—":fr(r.sust)}</td>`+
+      `<td class="num">${r.ecoul==null?"—":pct1(r.ecoul)+" mois"}</td>`+
+      `<td>${r.feed==null?'<span class="meter"><span class="pct">—</span></span>':
+        `<span class="meter"><span class="bar"><span class="fill" style="width:${feedPct}%;background:${feedCol}"></span></span><span class="pct">${feedPct}%</span></span>`}</td>`+
+      `<td><span class="pill ${r.status.cls}">${r.status.txt}</span></td>`;
+    tb.appendChild(tr);
+  });
+  $("fStock").textContent = fr(rows.reduce((a,r)=>a+Number(r.stock||0),0));
+  $("fAcq").textContent   = fr(rows.reduce((a,r)=>a+(r.acq||0),0));
+  $("fInj").textContent   = fr(injIdeal*N);
+  $("fSust").textContent  = fr(sumS);
+
+  tb.querySelectorAll(".cell-in").forEach(inp=>{
+    inp.addEventListener("change",e=>{
+      const i=+e.target.dataset.i, f=e.target.dataset.f, v=e.target.value.trim();
+      if(f==="acq") CENTERS[i].acq = v===""?null:Math.max(0,Number(v));
+      else CENTERS[i].stock = Math.max(0,Number(v)||0);
+      render();
+    });
+  });
+}
+
+/* controls */
+$("click").addEventListener("input",e=>{state.click=+e.target.value;render();});
+$("calls").addEventListener("input",e=>{state.calls=+e.target.value;render();});
+$("days").addEventListener("input",e=>{state.days=Math.max(1,+e.target.value||20);render();});
+
+/* pin scenario */
+function showPin(s){
+  $("pinnedTxt").textContent = `${pct1(s.click)} % de clic · ${s.calls} appels/jour · ${s.days} j ouvrés`;
+  $("pinned").classList.add("on");
+}
+$("pin").addEventListener("click",()=>{
+  const s={...state}; try{localStorage.setItem("scenario",JSON.stringify(s));}catch(e){}
+  showPin(s);
+});
+$("restore").addEventListener("click",()=>{
+  try{const s=JSON.parse(localStorage.getItem("scenario"));if(s){
+    state.click=s.click;state.calls=s.calls;state.days=s.days;
+    $("click").value=s.click;$("calls").value=s.calls;$("days").value=s.days;render();
+  }}catch(e){}
+});
+$("clearpin").addEventListener("click",()=>{try{localStorage.removeItem("scenario");}catch(e){}$("pinned").classList.remove("on");});
+try{const s=JSON.parse(localStorage.getItem("scenario"));if(s)showPin(s);}catch(e){}
+
+/* theme toggle */
+const tb2=$("theme");
+function applyTheme(t){ if(t)document.documentElement.setAttribute("data-theme",t); tb2.textContent = t==="dark"?"☀":"◐"; }
+try{const t=localStorage.getItem("theme"); if(t)applyTheme(t);}catch(e){}
+tb2.addEventListener("click",()=>{
+  const cur=document.documentElement.getAttribute("data-theme");
+  const isDark = cur? cur==="dark" : matchMedia("(prefers-color-scheme:dark)").matches;
+  const next=isDark?"light":"dark"; applyTheme(next);
+  try{localStorage.setItem("theme",next);}catch(e){}
+});
+
+render();
+</script>
