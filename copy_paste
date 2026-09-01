@@ -1,24 +1,24 @@
 # ══════════════════════════════════════════════════════════════════════════
-#  CENTRES CRÉDIT IMMO — CAPACITÉ D'APPEL vs STOCK CLIENTS
+#  CENTRES CRÉDIT IMMO — CAPACITÉ D'APPEL vs STOCK, VIA LE FUNNEL BANNIÈRE
 #  1 ligne = 1 client rattaché à un centre (CCI).
-#  Objectif :
-#    (1) distribution du nb de clients par centre
-#    (2) simulation : à 2, 3, 4, 5 appels/jour, en combien de jours (ouvrés)
-#        chaque centre a-t-il appelé TOUT son stock ?
-#  Mécanique : chaque centre traite son stock en parallèle →
-#    jours d'un centre = ceil(nb_clients / appels_par_jour)
-#    jours pour vider TOUTE la liste = max des centres (le plus gros contraint).
+#  Parcours réel : les 10k clients reçoivent une bannière in-app ; SEULS ceux
+#  qui CLIQUENT déclenchent un appel du centre. Le centre n'appelle donc pas
+#  tout le stock, mais  stock × taux_de_clic.
+#  Deux hypothèses (à ajuster avec le métier) : TAUX DE CLIC et APPELS/JOUR.
 #  → Adapte le bloc CONFIG puis exécute les cellules dans l'ordre.
 # ══════════════════════════════════════════════════════════════════════════
 
 # ─────────────────────────── CELLULE 0 · CONFIG + CHARGEMENT ────────────────
 import pandas as pd, numpy as np, matplotlib.pyplot as plt
 
-FILE               = "clients_centres.xlsx"   # .xlsx / .csv / .parquet
-COL_ID             = "Identifiant Tiers"
-COL_CCI            = "CCI"
-CALLS              = [2, 3, 4, 5]             # rythmes d'appels/jour à tester
-WORKING_DAYS_MONTH = 21                       # jours ouvrés / mois (réf. renouvellement du stock)
+FILE         = "clients_centres.xlsx"   # .xlsx / .csv / .parquet
+COL_ID       = "Identifiant Tiers"
+COL_CCI      = "CCI"
+
+CLICK_RATE   = 0.05          # HYPOTHÈSE 1 · taux de clic bannière (souvent 2–7 %)
+CALLS        = [2, 3, 4, 5]  # HYPOTHÈSE 2 · appels/jour testés
+RATES_GRID   = [0.02, 0.03, 0.05, 0.07]   # taux de clic pour la grille de sensibilité
+HORIZON_DAYS = 21            # horizon de référence en jours ouvrés (cycle de renouvellement / durée campagne)
 
 if   FILE.endswith(".xlsx"):    df = pd.read_excel(FILE)
 elif FILE.endswith(".parquet"): df = pd.read_parquet(FILE)
@@ -32,60 +32,83 @@ print("Clients uniques :", df[COL_ID].nunique(), "| Centres :", df[COL_CCI].nuni
 # ──────────────── CELLULE 1 · DISTRIBUTION DU STOCK PAR CENTRE ──────────────
 stock = (df.groupby(COL_CCI)[COL_ID].nunique()
            .sort_values(ascending=False).rename("nb_clients"))
-print("Stock par centre — statistiques :")
+print("Stock (clients ciblés) par centre — statistiques :")
 print(stock.describe().round(1))
-print(f"\nStock total : {stock.sum():,} clients réparties sur {len(stock)} centres")
-print("\nTop 10 centres (plus gros stock) :"); print(stock.head(10))
-print("\nBottom 10 centres :");                print(stock.tail(10))
+print(f"\nStock total : {stock.sum():,} clients sur {len(stock)} centres")
+print("\nTop 10 :"); print(stock.head(10))
+print("\nBottom 10 :"); print(stock.tail(10))
 
 fig, ax = plt.subplots(1, 2, figsize=(13, 4.6))
 ax[0].hist(stock.values, bins=30, color="#1E6FA8", edgecolor="white")
-ax[0].set_title("Distribution du nb de clients par centre")
+ax[0].set_title("Distribution du nb de clients ciblés par centre")
 ax[0].set_xlabel("clients par centre"); ax[0].set_ylabel("nb de centres")
 stock.head(15).iloc[::-1].plot.barh(ax=ax[1], color="#0F8A5F")
 ax[1].set_title("Top 15 centres par stock"); ax[1].set_xlabel("clients")
 plt.tight_layout(); plt.show()
 
 
-# ──────────── CELLULE 2 · SIMULATION — JOURS POUR VIDER LE STOCK ────────────
-sim = pd.DataFrame({"nb_clients": stock})
-for r in CALLS:
-    sim[f"jours_{r}_par_jour"] = np.ceil(sim["nb_clients"] / r).astype(int)
-print("Jours ouvrés pour appeler tout le stock, par centre (extrait) :")
-print(sim.head(10))
+# ──── CELLULE 2 · SIMULATION — la bannière filtre le stock via le taux de clic ─
+# Clics attendus par centre = stock × CLICK_RATE ; ce sont eux qui déclenchent
+# un appel. Jours pour tout appeler = ceil(clics / appels_par_jour).
+clicks = (stock * CLICK_RATE).round().astype(int).rename("clics_attendus")
+print(f"Taux de clic = {CLICK_RATE:.0%}  →  {clicks.sum():,} clics attendus "
+      f"sur {stock.sum():,} clients ciblés")
+print("\nClics attendus par centre — statistiques :"); print(clicks.describe().round(1))
 
-# Résumé par rythme
+sim = pd.DataFrame({"nb_clients": stock, "clics_attendus": clicks})
+for r in CALLS:
+    sim[f"jours_{r}_par_jour"] = np.ceil(sim["clics_attendus"] / r).astype(int)
+print("\nJours pour appeler tous les clics, par centre (les plus chargés) :")
+print(sim.sort_values("clics_attendus", ascending=False).head(10))
+
 rows = {}
 for r in CALLS:
-    d = np.ceil(stock / r)
+    d = np.ceil(clicks / r)
     rows[f"{r} appels/j"] = {
         "médiane jours":                 float(d.median()),
         "moyenne jours":                 round(float(d.mean()), 1),
-        "MAX jours (= vider la liste)":  int(d.max()),
-        f"% centres > {WORKING_DAYS_MONTH}j ouvrés": round(float((d > WORKING_DAYS_MONTH).mean() * 100), 1),
-        f"nb centres > {WORKING_DAYS_MONTH}j":       int((d > WORKING_DAYS_MONTH).sum()),
+        "MAX jours (vider la liste)":    int(d.max()),
+        f"nb centres > {HORIZON_DAYS}j": int((d > HORIZON_DAYS).sum()),
     }
-summary = pd.DataFrame(rows).T
-print("\nRésumé par rythme d'appel :")
-print(summary)
-print(f"\nLecture : à 5 appels/j, il faut {int(np.ceil(stock/5).max())} jours ouvrés pour que "
-      f"MÊME le plus gros centre ait tout appelé (les centres travaillent en parallèle).")
+print(f"\nRésumé par rythme (sur les clics, horizon {HORIZON_DAYS}j) :")
+print(pd.DataFrame(rows).T)
 
-# Courbe de capacité : % de centres ayant vidé leur stock au jour d, par rythme
+# Courbe : % de centres ayant appelé tous leurs cliqueurs au jour d
 fig, ax = plt.subplots(figsize=(11, 5))
-maxd   = int(np.ceil(stock / min(CALLS)).max())
+maxd   = int(np.ceil(clicks.replace(0, 1) / min(CALLS)).max())
 days   = np.arange(1, maxd + 1)
 colors = ["#1E6FA8", "#0F8A5F", "#E0912A", "#C13E70", "#7A5AA6"]
 for r, c in zip(CALLS, colors):
-    dneed = np.ceil(stock / r)
-    pct   = [(dneed <= d).mean() * 100 for d in days]
-    ax.plot(days, pct, lw=2, color=c, label=f"{r} appels/j")
-ax.axvline(WORKING_DAYS_MONTH, color="#94A3B8", ls="--", lw=1.5,
-           label=f"{WORKING_DAYS_MONTH} j ouvrés (~1 mois)")
-ax.set_xlabel("jours ouvrés"); ax.set_ylabel("% de centres ayant vidé leur stock")
-ax.set_title("Capacité d'appel : % de centres ayant appelé tous leurs clients, selon le rythme")
+    d = np.ceil(clicks / r)
+    ax.plot(days, [(d <= dd).mean() * 100 for dd in days], lw=2, color=c, label=f"{r} appels/j")
+ax.axvline(HORIZON_DAYS, color="#94A3B8", ls="--", lw=1.5, label=f"{HORIZON_DAYS} j (horizon)")
+ax.set_xlabel("jours ouvrés"); ax.set_ylabel("% de centres ayant fini")
+ax.set_title(f"Capacité au taux de clic {CLICK_RATE:.0%} : % de centres ayant appelé tous leurs cliqueurs")
 ax.set_ylim(0, 101); ax.legend(); ax.grid(alpha=.3)
 plt.tight_layout(); plt.show()
 
-# Export optionnel du détail par centre
-# sim.to_csv("simulation_capacite_centres.csv")
+
+# ──── CELLULE 3 · SENSIBILITÉ — les deux hypothèses en même temps ────────────
+# MAX jours pour que TOUS les centres aient fini, selon (taux de clic × appels/j).
+grid = pd.DataFrame(
+    {f"{r}/j": [int(np.ceil((stock * cr).round() / r).max()) for cr in RATES_GRID]
+     for r in CALLS},
+    index=[f"{cr:.0%}" for cr in RATES_GRID])
+grid.index.name = "taux de clic"
+print("MAX jours ouvrés pour vider TOUTE la liste (le plus gros centre contraint) :")
+print(grid)
+
+fig, ax = plt.subplots(figsize=(8, 4.5))
+im = ax.imshow(grid.values, cmap="YlOrRd", aspect="auto")
+ax.set_xticks(range(len(CALLS)));      ax.set_xticklabels([f"{r}/j" for r in CALLS])
+ax.set_yticks(range(len(RATES_GRID))); ax.set_yticklabels([f"{cr:.0%}" for cr in RATES_GRID])
+for i in range(len(RATES_GRID)):
+    for j in range(len(CALLS)):
+        v = grid.values[i, j]
+        ax.text(j, i, v, ha="center", va="center",
+                color="white" if v > grid.values.max() * .6 else "black", fontsize=11)
+ax.set_xlabel("appels / jour"); ax.set_ylabel("taux de clic")
+ax.set_title("MAX jours ouvrés pour vider toute la liste")
+plt.colorbar(im, label="jours"); plt.tight_layout(); plt.show()
+
+# Export optionnel : sim.to_csv("simulation_capacite_centres.csv")
