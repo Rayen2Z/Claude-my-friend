@@ -117,42 +117,52 @@ plt.colorbar(im, label="jours"); plt.tight_layout(); plt.show()
 # Export optionnel : sim.to_csv("simulation_capacite_centres.csv")
 
 
-# ──── CELLULE 4 · OBJECTIF : repérer les centres SOUS-ALIMENTÉS (jours creux) ─
-# On veut éviter qu'un centre tourne à vide des semaines faute de clics.
+# ──── CELLULE 4 · FLUX : surcharge ET sous-alimentation en même temps ────────
 # Clics étalés sur CAMPAIGN_DAYS → arrivée/jour = clics / CAMPAIGN_DAYS.
-#   occupation = arrivée / capacité (plafonnée à 100 %) ; le reste = jours creux.
-# Un centre "sous-alimenté" = beaucoup de jours creux (peu de clics à traiter).
-IDLE_ALERT = 10       # seuil d'alerte : nb de jours creux (~2 semaines ouvrées)
+# Métrique unique = charge % (arrivée ÷ capacité), avec 2 seuils :
+#   charge > 100 %                → SURCHARGE  (backlog qui s'accumule)
+#   charge < seuil bas (IDLE)     → SOUS-ALIMENTÉ (jours creux, tourne à vide)
+#   entre les deux                → OK
+IDLE_ALERT = 10       # seuil d'alerte sous-charge : nb de jours creux (~2 sem. ouvrées)
 
-arr       = clicks / CAMPAIGN_DAYS
-occ_ratio = (arr / CALLS_PER_DAY).clip(upper=1.0)          # taux d'occupation (0–1)
+arr     = clicks / CAMPAIGN_DAYS
+occ_thr = (1 - IDLE_ALERT / CAMPAIGN_DAYS) * 100          # charge % sous laquelle = jours creux
 d = pd.DataFrame({
     "clics_attendus":   clicks,
     "arrivee_par_jour": arr.round(2),
-    "occupation_%":     (occ_ratio * 100).round(0),
-    "jours_creux":      (CAMPAIGN_DAYS * (1 - occ_ratio)).round(0).astype(int),
-    "saturé":           arr > CALLS_PER_DAY,
-}).sort_values("jours_creux", ascending=False)
+    "charge_%":         (arr / CALLS_PER_DAY * 100).round(0),
+    "jours_creux":      (CAMPAIGN_DAYS * (1 - (arr / CALLS_PER_DAY).clip(upper=1))).round(0).astype(int),
+    "backlog_fin":      ((arr - CALLS_PER_DAY).clip(lower=0) * CAMPAIGN_DAYS).round(0).astype(int),
+})
+d["etat"] = np.select([d["charge_%"] > 100, d["charge_%"] < occ_thr],
+                      ["surcharge", "sous-alimenté"], default="ok")
 
 tot_clicks, tot_cap = int(clicks.sum()), len(stock) * CALLS_PER_DAY * CAMPAIGN_DAYS
 print(f"Scénario : clic {CLICK_RATE:.0%} · {CALLS_PER_DAY} appels/j · campagne {CAMPAIGN_DAYS} j")
-print(f"Demande totale : {tot_clicks:,} clics  vs  capacité totale : {tot_cap:,} appels "
-      f"→ occupation GLOBALE ≈ {tot_clicks / tot_cap * 100:.0f} %")
-print(f"Centres inactifs > {IDLE_ALERT} j ouvrés : {int((d['jours_creux'] > IDLE_ALERT).sum())} / {len(d)}")
-print(f"Occupation moyenne par centre : {d['occupation_%'].mean():.0f} %")
-print(f"\nCentres les plus SOUS-ALIMENTÉS (à risque de tourner à vide) :")
-print(d.head(12))
+print(f"Demande {tot_clicks:,} clics vs capacité {tot_cap:,} appels → occupation GLOBALE ≈ "
+      f"{tot_clicks / tot_cap * 100:.0f} %")
+print("Répartition des centres :", d["etat"].value_counts().to_dict())
 
-occ_thr = (1 - IDLE_ALERT / CAMPAIGN_DAYS) * 100           # occupation sous laquelle on alerte
+print("\n═══ PARTIE A · SURCHARGE (backlog en fin de campagne) ═══")
+sur = d[d["etat"] == "surcharge"].sort_values("charge_%", ascending=False)
+print("Aucun centre en surcharge à ce scénario." if sur.empty
+      else sur[["clics_attendus", "arrivee_par_jour", "charge_%", "backlog_fin"]].head(12).to_string())
+
+print(f"\n═══ PARTIE B · SOUS-ALIMENTÉS (> {IDLE_ALERT} j creux) ═══")
+sub = d[d["etat"] == "sous-alimenté"].sort_values("jours_creux", ascending=False)
+print("Aucun centre sous-alimenté à ce scénario." if sub.empty
+      else sub[["clics_attendus", "arrivee_par_jour", "charge_%", "jours_creux"]].head(12).to_string())
+
+# Graphe unique : charge par centre, 3 couleurs, 2 seuils
+COLOR = {"surcharge": "#C0492F", "ok": "#0F8A5F", "sous-alimenté": "#E0912A"}
+ds = d.sort_values("charge_%")
 fig, ax = plt.subplots(figsize=(11, 5))
-o = d["occupation_%"].sort_values().values
-ax.bar(range(len(o)), o, color=np.where(o < occ_thr, "#C0492F", "#0F8A5F"))
-ax.axhline(occ_thr, ls="--", color="#94A3B8", lw=1.5,
-           label=f"seuil d'alerte (> {IDLE_ALERT} j creux)")
-ax.set_xlabel("centres (triés par occupation croissante)")
-ax.set_ylabel("occupation %"); ax.set_ylim(0, 101)
-ax.set_title(f"Occupation des centres — rouge = risque de jours creux "
+ax.bar(range(len(ds)), ds["charge_%"].values, color=[COLOR[e] for e in ds["etat"]])
+ax.axhline(100, ls="--", color="#C0492F", lw=1.3, label="surcharge (100 %)")
+ax.axhline(occ_thr, ls="--", color="#E0912A", lw=1.3, label=f"sous-charge (> {IDLE_ALERT} j creux)")
+ax.set_xlabel("centres (triés par charge)"); ax.set_ylabel("charge % (demande / capacité)")
+ax.set_title(f"Charge des centres — surcharge ↑ / sous-alimenté ↓  "
              f"(clic {CLICK_RATE:.0%}, {CALLS_PER_DAY} appels/j, {CAMPAIGN_DAYS} j)")
 ax.legend(); plt.tight_layout(); plt.show()
 
-# Export optionnel : d.to_csv("centres_sous_alimentes.csv")
+# Export optionnel : d.to_csv("charge_centres.csv")
