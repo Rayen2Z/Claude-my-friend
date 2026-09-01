@@ -15,10 +15,13 @@ FILE         = "clients_centres.xlsx"   # .xlsx / .csv / .parquet
 COL_ID       = "Identifiant Tiers"
 COL_CCI      = "CCI"
 
-CLICK_RATE   = 0.05          # HYPOTHÈSE 1 · taux de clic bannière (souvent 2–7 %)
-CALLS        = [2, 3, 4, 5]  # HYPOTHÈSE 2 · appels/jour testés
-RATES_GRID   = [0.02, 0.03, 0.05, 0.07]   # taux de clic pour la grille de sensibilité
-HORIZON_DAYS = 21            # horizon de référence en jours ouvrés (cycle de renouvellement / durée campagne)
+CLICK_RATE    = 0.05          # HYPOTHÈSE 1 · taux de clic bannière (souvent 2–7 %)
+CALLS         = [2, 3, 4, 5]  # HYPOTHÈSE 2 · appels/jour testés (cellules 2-3)
+RATES_GRID    = [0.02, 0.03, 0.05, 0.07]   # taux de clic pour la grille de sensibilité
+HORIZON_DAYS  = 21            # horizon de référence en jours ouvrés
+
+CAMPAIGN_DAYS = 30            # HYPOTHÈSE 3 · durée de diffusion bannière (jours ouvrés) — cellule 4
+CALLS_PER_DAY = 5             # rythme retenu pour le scénario "flux" de la cellule 4
 
 if   FILE.endswith(".xlsx"):    df = pd.read_excel(FILE)
 elif FILE.endswith(".parquet"): df = pd.read_parquet(FILE)
@@ -112,3 +115,44 @@ ax.set_title("MAX jours ouvrés pour vider toute la liste")
 plt.colorbar(im, label="jours"); plt.tight_layout(); plt.show()
 
 # Export optionnel : sim.to_csv("simulation_capacite_centres.csv")
+
+
+# ──── CELLULE 4 · CAS 2 — clics étalés sur la durée de campagne ──────────────
+# La bannière diffuse les clics sur CAMPAIGN_DAYS jours ouvrés (au lieu de tout
+# au jour 1). Arrivée/jour par centre = clics / CAMPAIGN_DAYS.
+#   - arrivée/jour <= appels/jour → le centre SUIT le flux, avec des jours creux
+#     (sous-charge : moins de travail pour les gestionnaires)
+#   - arrivée/jour >  appels/jour → BACKLOG qui s'accumule (centre = goulot)
+# NB : moyenne lissée ; en réalité les clics sont irréguliers, donc un centre
+#      "qui suit" aura quand même des pics ponctuels.
+arr = clicks / CAMPAIGN_DAYS                                   # clics/jour entrants par centre
+cap = pd.DataFrame({
+    "clics_attendus":     clicks,
+    "arrivee_par_jour":   arr.round(2),
+    "capacite_par_jour":  CALLS_PER_DAY,
+    "charge_%":           (arr / CALLS_PER_DAY * 100).round(0),   # demande / capacité
+    "suit_le_flux":       arr <= CALLS_PER_DAY,
+})
+cap["jours_creux_campagne"] = np.where(cap["suit_le_flux"],
+        (CAMPAIGN_DAYS * (1 - arr / CALLS_PER_DAY)).round(0), 0).astype(int)
+cap["backlog_fin_campagne"] = np.where(cap["suit_le_flux"], 0,
+        ((arr - CALLS_PER_DAY) * CAMPAIGN_DAYS).round(0)).astype(int)
+
+print(f"Scénario : campagne {CAMPAIGN_DAYS} j ouvrés · {CALLS_PER_DAY} appels/j · clic {CLICK_RATE:.0%}")
+print(f"Centres qui suivent le flux   : {int(cap['suit_le_flux'].sum())} / {len(cap)}")
+print(f"Charge moyenne (demande/capa) : {cap['charge_%'].mean():.0f} %")
+print(f"Jours creux moyens / centre   : {cap['jours_creux_campagne'].mean():.0f} sur {CAMPAIGN_DAYS}")
+print("\nCentres les plus chargés :")
+print(cap.sort_values("charge_%", ascending=False).head(12))
+
+fig, ax = plt.subplots(figsize=(11, 5))
+u = cap["charge_%"].sort_values(ascending=False)
+ax.bar(range(len(u)), u.values,
+       color=np.where(u.values <= 100, "#0F8A5F", "#C0492F"))
+ax.axhline(100, ls="--", color="#94A3B8", lw=1.5, label="saturation (100 %)")
+ax.set_xlabel("centres (triés par charge)"); ax.set_ylabel("charge % (demande / capacité)")
+ax.set_title(f"Charge des gestionnaires — {CALLS_PER_DAY} appels/j, clic {CLICK_RATE:.0%}, "
+             f"campagne {CAMPAIGN_DAYS} j")
+ax.legend(); plt.tight_layout(); plt.show()
+
+# Export optionnel : cap.to_csv("charge_centres_cas2.csv")
