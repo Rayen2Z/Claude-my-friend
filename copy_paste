@@ -166,3 +166,71 @@ ax.set_title(f"Charge des centres — surcharge ↑ / sous-alimenté ↓  "
 ax.legend(); plt.tight_layout(); plt.show()
 
 # Export optionnel : d.to_csv("charge_centres.csv")
+
+
+# ──── CELLULE 5 · RÉTRO-INGÉNIERIE — injection idéale de clients / centre ─────
+# Campagne PERMANENTE → raisonnement en régime stationnaire, par MOIS.
+# Chaîne inversée :  injection × taux_clic = clics = appels à passer.
+# On veut clics ≈ capacité mensuelle du centre.
+#   capacité_mois       = APPELS_JOUR × JOURS_MOIS
+#   injection_idéale(r) = capacité_mois / r        (clients / centre / mois)
+APPELS_JOUR   = 5
+JOURS_MOIS    = 20                          # jours ouvrés / mois
+TAUX_CLIC     = [0.02, 0.03, 0.05, 0.07]    # éventail plausible
+TAUX_CIBLE    = 0.05                         # hypothèse centrale (à valider avec le métier)
+N_CENTRES     = 6
+
+cap_mois = APPELS_JOUR * JOURS_MOIS
+print(f"Capacité par centre : {APPELS_JOUR} appels/j × {JOURS_MOIS} j = {cap_mois} appels/mois")
+print(f"→ il faut {cap_mois} CLICS/mois pour occuper pleinement un centre.\n")
+
+# (A) injection nécessaire selon le taux de clic
+reco = pd.DataFrame({
+    "taux_clic":              [f"{r:.0%}" for r in TAUX_CLIC],
+    "injection_centre_mois":  [round(cap_mois / r) for r in TAUX_CLIC],
+})
+reco[f"injection_totale_{N_CENTRES}c"] = reco["injection_centre_mois"] * N_CENTRES
+print("(A) Injection pour occuper pleinement un centre, selon le taux de clic :")
+print(reco.to_string(index=False))
+
+inj_cible = round(cap_mois / TAUX_CIBLE)
+inj_creux = round(cap_mois / min(TAUX_CLIC))     # dimensionné pour le clic BAS = jamais de jours creux
+print(f"\n➜ Hypothèse centrale {TAUX_CIBLE:.0%} : ~{inj_cible} clients/centre/mois "
+      f"(~{inj_cible*N_CENTRES} au total).")
+print(f"➜ Zéro jour creux même si le clic tombe à {min(TAUX_CLIC):.0%} : ~{inj_creux}/centre/mois "
+      f"(le surplus de clics devient un backlog, absorbé par la campagne permanente).")
+
+# (B) si on s'engage sur l'injection cible, quelle charge selon le VRAI taux de clic ?
+band = pd.DataFrame({
+    "taux_clic_réel": [f"{r:.0%}" for r in TAUX_CLIC],
+    "clics_mois":     [round(inj_cible * r) for r in TAUX_CLIC],
+    "charge_%":       [round(inj_cible * r / cap_mois * 100) for r in TAUX_CLIC],
+})
+band["effet"] = np.select(
+    [band["charge_%"] < 90, band["charge_%"] > 110],
+    ["sous-charge (jours creux)", "surcharge (backlog)"], default="OK")
+print(f"\n(B) Si on injecte {inj_cible}/centre/mois et que le taux de clic diffère :")
+print(band.to_string(index=False))
+
+# (C) faisabilité : le pool attaché couvre-t-il l'injection cible ? (nécessite la cellule 1)
+try:
+    feas = pd.DataFrame({"stock_attaché": stock})
+    feas["mois_couverts"] = (feas["stock_attaché"] / inj_cible).round(1)
+    print(f"\n(C) Couverture du pool attaché à l'injection cible ({inj_cible}/mois) — "
+          f"< 1 = à réalimenter par les acquisitions :")
+    print(feas.sort_values("mois_couverts").to_string())
+except NameError:
+    print("\n(C) Exécute la cellule 1 pour la faisabilité par centre (série 'stock').")
+
+# Graphe : injection idéale vs taux de clic
+fig, ax = plt.subplots(figsize=(9, 5))
+inj = [cap_mois / r for r in TAUX_CLIC]
+ax.bar([f"{r:.0%}" for r in TAUX_CLIC], inj, color="#1E6FA8")
+ax.axhline(inj_cible, ls="--", color="#C0492F", lw=1.5, label=f"cible {TAUX_CIBLE:.0%} = {inj_cible}")
+for i, v in enumerate(inj):
+    ax.text(i, v, f"{round(v)}", ha="center", va="bottom", fontsize=9)
+ax.set_xlabel("taux de clic"); ax.set_ylabel("injection / centre / mois")
+ax.set_title(f"Injection idéale par centre pour occuper {cap_mois} appels/mois")
+ax.legend(); plt.tight_layout(); plt.show()
+
+# Export optionnel : reco.to_csv("injection_ideale.csv")
