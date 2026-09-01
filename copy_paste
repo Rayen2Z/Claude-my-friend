@@ -300,3 +300,46 @@ ax.set_xlabel("clients à injecter / mois"); ax.set_ylabel("centre (CCI)")
 plt.tight_layout(); plt.show()
 
 # Export pour le mail au manager : reco.to_csv("recommandation_injection_par_centre.csv")
+
+
+# ──── CELLULE 7 · SOUTENABILITÉ — injection vs acquisitions mensuelles ───────
+# En campagne permanente, on ne peut pas injecter durablement plus vite que le
+# centre ne se réalimente en nouveaux clients. On confronte donc l'injection
+# idéale au rythme d'acquisition mensuel (à estimer, par centre).
+#
+# → REMPLIS ACQ_MENSUELLE : nouveaux clients / mois / centre. Remplace chaque
+#   None par ton estimation. (Astuce : la ligne ci-dessous régénère le squelette
+#   avec tes CCI si tu veux le re-copier.)
+# import pprint; print("ACQ_MENSUELLE ="); pprint.pprint({str(c): None for c in stock.index})
+
+ACQ_MENSUELLE = {str(c): None for c in stock.index}      # ← À REMPLIR (remplace les None)
+
+# alignement robuste dict(str) -> centres
+acq = pd.Series({k: ACQ_MENSUELLE.get(str(k), np.nan) for k in stock.index}, dtype="float")
+
+out = reco.copy()
+out["acq_mensuelle"]        = acq                                          # ta saisie
+out["injection_ideale"]     = out["injection_reco_mois"]                   # = capacité / taux_clic
+out["injection_soutenable"] = np.minimum(out["injection_ideale"], out["acq_mensuelle"])
+out["deficit_mensuel"]      = (out["injection_ideale"] - out["acq_mensuelle"]).clip(lower=0)
+out["runway_mois"]          = np.where(out["deficit_mensuel"] > 0,
+                                       (out["stock_attaché"] / out["deficit_mensuel"]).round(1),
+                                       np.nan)   # NaN = pas de déficit (autosuffisant)
+def _verdict(row):
+    if pd.isna(row["acq_mensuelle"]):   return "à renseigner"
+    if row["deficit_mensuel"] <= 0:     return "autosuffisant"
+    return f"{row['runway_mois']:.0f} mois avant sous-alim."
+out["verdict"] = out.apply(_verdict, axis=1)
+
+COLS = ["stock_attaché", "acq_mensuelle", "injection_ideale", "injection_soutenable",
+        "deficit_mensuel", "runway_mois", "verdict"]
+print("════ SOUTENABILITÉ PAR CENTRE (remplis ACQ_MENSUELLE d'abord) ════")
+print(out[COLS].to_string())
+print("\nLecture des colonnes :")
+print("  injection_ideale     = clients/mois pour occuper le centre (capacité / taux de clic)")
+print("  injection_soutenable = ce qu'on peut tenir DURABLEMENT = min(idéale, acquisitions/mois)")
+print("  deficit_mensuel      = clients/mois puisés dans le stock au-delà des acquisitions")
+print("  runway_mois          = mois avant d'épuiser le stock initial à l'injection idéale")
+print("  verdict              = 'autosuffisant' si acquisitions >= idéale, sinon durée de tenue")
+
+# Export : out[COLS].to_csv("soutenabilite_par_centre.csv")
