@@ -343,3 +343,38 @@ print("  runway_mois          = mois avant d'épuiser le stock initial à l'inje
 print("  verdict              = 'autosuffisant' si acquisitions >= idéale, sinon durée de tenue")
 
 # Export : out[COLS].to_csv("soutenabilite_par_centre.csv")
+
+
+# ──── CELLULE 8 · RÉCAP TEXTE — une phrase par centre (à coller dans le mail) ─
+# Synthétise cellules 6 + 7 en une recommandation lisible par centre.
+lignes = []
+for cci, row in out.iterrows():
+    ideal = int(row["injection_ideale"]); stk = int(row["stock_attaché"]); acqv = row["acq_mensuelle"]
+    if pd.isna(acqv):
+        lignes.append(f"• Centre {cci} : injecter ~{ideal} clients/mois (idéal, clic {TAUX_CIBLE:.0%}). "
+                      f"Soutenabilité à confirmer — acquisitions mensuelles non renseignées.")
+    elif row["deficit_mensuel"] <= 0:
+        lignes.append(f"• Centre {cci} : injecter ~{ideal} clients/mois — AUTOSUFFISANT "
+                      f"(acquisitions {int(acqv)}/mois couvrent le besoin).")
+    else:
+        sout = int(row["injection_soutenable"]); rw = row["runway_mois"]
+        lignes.append(f"• Centre {cci} : viser ~{sout} clients/mois en rythme permanent (= son acquisition). "
+                      f"L'idéal ({ideal}/mois) viderait son stock de {stk:,} en ~{rw:.0f} mois "
+                      f"→ booster l'acquisition ou réallouer du stock.")
+recap = "\n".join(lignes)
+
+print("════════════════════ RÉCAP POUR LE MAIL ════════════════════\n")
+print(f"Hypothèses : taux de clic {TAUX_CIBLE:.0%} · {JOURS_MOIS} j ouvrés/mois · "
+      f"{APPELS_JOUR if not isinstance(APPELS_JOUR, dict) else 'capacité variable'} appels/jour.\n")
+print(recap)
+
+n_missing = int(out["acq_mensuelle"].isna().sum())
+tot_ideal = int(out["injection_ideale"].sum())
+if n_missing:
+    print(f"\nInjection totale IDÉALE : {tot_ideal:,} clients/mois. "
+          f"(Total soutenable calculable une fois les {n_missing} acquisition(s) renseignée(s).)")
+else:
+    tot_sout = int(np.nansum(out["injection_soutenable"]))
+    print(f"\nInjection totale — idéale {tot_ideal:,}/mois · soutenable {tot_sout:,}/mois.")
+
+# Export : open("recap_mail.txt", "w", encoding="utf-8").write(recap)
