@@ -4,6 +4,8 @@
 #  Parcours réel : les 10k clients reçoivent une bannière in-app ; SEULS ceux
 #  qui CLIQUENT déclenchent un appel du centre. Le centre n'appelle donc pas
 #  tout le stock, mais  stock × taux_de_clic.
+#  ENGAGEMENT MÉTIER : rappeler chaque cliqueur sous 24 h (contact supposé 100 %,
+#  joignabilité hors scope) → contrainte = clics/jour <= capacité d'appel/jour.
 #  Deux hypothèses (à ajuster avec le métier) : TAUX DE CLIC et APPELS/JOUR.
 #  → Adapte le bloc CONFIG puis exécute les cellules dans l'ordre.
 # ══════════════════════════════════════════════════════════════════════════
@@ -118,12 +120,12 @@ plt.colorbar(im, label="jours"); plt.tight_layout(); plt.show()
 # Export optionnel : sim.to_csv("simulation_capacite_centres.csv")
 
 
-# ──── CELLULE 4 · FLUX : surcharge ET sous-alimentation en même temps ────────
-# Clics étalés sur CAMPAIGN_DAYS → arrivée/jour = clics / CAMPAIGN_DAYS.
-# Métrique unique = charge % (arrivée ÷ capacité), avec 2 seuils :
-#   charge > 100 %                → SURCHARGE  (backlog qui s'accumule)
+# ──── CELLULE 4 · FLUX : rappel < 24 h tenable ? (surcharge / sous-charge) ────
+# Engagement : chaque cliqueur rappelé sous 24 h → clics/jour <= capacité/jour.
+# Clics étalés → arrivée/jour = clics / CAMPAIGN_DAYS. charge % = arrivée ÷ capacité :
+#   charge > 100 %                → SURCHARGE → rappel > 24 h (flux de clics > capacité)
 #   charge < seuil bas (IDLE)     → SOUS-ALIMENTÉ (jours creux, tourne à vide)
-#   entre les deux                → OK
+#   entre les deux                → OK (24 h tenu, capacité bien utilisée)
 IDLE_ALERT = 10       # seuil d'alerte sous-charge : nb de jours creux (~2 sem. ouvrées)
 
 arr     = clicks / CAMPAIGN_DAYS
@@ -144,7 +146,7 @@ print(f"Demande {tot_clicks:,} clics vs capacité {tot_cap:,} appels → occupat
       f"{tot_clicks / tot_cap * 100:.0f} %")
 print("Répartition des centres :", d["etat"].value_counts().to_dict())
 
-print("\n═══ PARTIE A · SURCHARGE (backlog en fin de campagne) ═══")
+print("\n═══ PARTIE A · SURCHARGE → RAPPEL > 24 H (flux de clics > capacité) ═══")
 sur = d[d["etat"] == "surcharge"].sort_values("charge_%", ascending=False)
 print("Aucun centre en surcharge à ce scénario." if sur.empty
       else sur[["clics_attendus", "arrivee_par_jour", "charge_%", "backlog_fin"]].head(12).to_string())
@@ -172,8 +174,9 @@ ax.legend(); plt.tight_layout(); plt.show()
 
 # ──── CELLULE 5 · RÉTRO-INGÉNIERIE — injection idéale de clients / centre ─────
 # Campagne PERMANENTE → raisonnement en régime stationnaire, par MOIS.
-# Chaîne inversée :  injection × taux_clic = clics = appels à passer.
-# On veut clics ≈ capacité mensuelle du centre.
+# Chaîne inversée :  injection × taux_clic = clics = appels à passer sous 24 h.
+# Engagement rappel < 24 h → clics/jour <= capacité/jour ; l'injection idéale est
+# le PLAFOND qui sature la capacité (au-delà, le 24 h saute).
 #   capacité_mois       = APPELS_JOUR × JOURS_MOIS
 #   injection_idéale(r) = capacité_mois / r        (clients / centre / mois)
 APPELS_JOUR   = 5
@@ -195,12 +198,17 @@ reco[f"injection_totale_{N_CENTRES}c"] = reco["injection_centre_mois"] * N_CENTR
 print("(A) Injection pour occuper pleinement un centre, selon le taux de clic :")
 print(reco.to_string(index=False))
 
-inj_cible = round(cap_mois / TAUX_CIBLE)
-inj_creux = round(cap_mois / min(TAUX_CLIC))     # dimensionné pour le clic BAS = jamais de jours creux
-print(f"\n➜ Hypothèse centrale {TAUX_CIBLE:.0%} : ~{inj_cible} clients/centre/mois "
-      f"(~{inj_cible*N_CENTRES} au total).")
-print(f"➜ Zéro jour creux même si le clic tombe à {min(TAUX_CLIC):.0%} : ~{inj_creux}/centre/mois "
-      f"(le surplus de clics devient un backlog, absorbé par la campagne permanente).")
+inj_cible   = round(cap_mois / TAUX_CIBLE)
+inj_prudent = round(cap_mois / max(TAUX_CLIC))   # dimensionné pour le clic HAUT = SLA 24h garanti
+print(f"\nENGAGEMENT : rappeler chaque cliqueur sous 24 h → il faut clics/jour <= capacité/jour.")
+print(f"L'injection idéale est donc un PLAFOND : au-delà, le flux de clics dépasse la capacité "
+      f"et le rappel 24 h saute.")
+print(f"➜ Cible {TAUX_CIBLE:.0%} : ~{inj_cible} clients/centre/mois (~{inj_cible*N_CENTRES} au total) "
+      f"— tient le 24 h si le clic est ≈ {TAUX_CIBLE:.0%}.")
+print(f"➜ Prudent (24 h garanti même à {max(TAUX_CLIC):.0%}) : ~{inj_prudent}/centre/mois "
+      f"— si le clic est plus bas, jours creux mais 24 h toujours tenu.")
+print(f"  Campagne permanente + ajustable → démarrer prudent, puis monter vers la cible en "
+      f"observant le taux de clic réel.")
 
 # (B) si on s'engage sur l'injection cible, quelle charge selon le VRAI taux de clic ?
 band = pd.DataFrame({
@@ -272,6 +280,10 @@ print(f"════ RECOMMANDATION · clic {TAUX_CIBLE:.0%} · {JOURS_MOIS} j/m
 print(reco.to_string())
 print(f"\n➜ Injection totale recommandée : {reco['injection_reco_mois'].sum():,} clients/mois "
       f"sur {len(reco)} centres")
+inj_prudent_c = int((cap / max(TAUX_CLIC)).round().iloc[0]) if len(cap) else 0
+print(f"SLA 24 h : l'injection ci-dessus tient si le clic ≈ {TAUX_CIBLE:.0%}. Pour garantir le "
+      f"rappel < 24 h même à {max(TAUX_CLIC):.0%}, plafonner à ~{inj_prudent_c}/centre/mois "
+      f"(dimensionné sur le clic haut).")
 
 # (2) injection PAR CENTRE selon le taux de clic (variable 1)
 matC = pd.DataFrame({f"clic {r:.0%}": (cap / r).round().astype(int) for r in TAUX_CLIC})
@@ -364,8 +376,9 @@ for cci, row in out.iterrows():
 recap = "\n".join(lignes)
 
 print("════════════════════ RÉCAP POUR LE MAIL ════════════════════\n")
-print(f"Hypothèses : taux de clic {TAUX_CIBLE:.0%} · {JOURS_MOIS} j ouvrés/mois · "
-      f"{APPELS_JOUR if not isinstance(APPELS_JOUR, dict) else 'capacité variable'} appels/jour.\n")
+print(f"Hypothèses : engagement rappel < 24 h · taux de clic {TAUX_CIBLE:.0%} · {JOURS_MOIS} j "
+      f"ouvrés/mois · {APPELS_JOUR if not isinstance(APPELS_JOUR, dict) else 'capacité variable'} "
+      f"appels/jour.\n")
 print(recap)
 
 n_missing = int(out["acq_mensuelle"].isna().sum())
