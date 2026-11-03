@@ -1,120 +1,83 @@
-# ══════════════════════════════════════════════════════════════════════════
-#  INJECTION OPTIMALE PAR CENTRE — campagne crédit immo (rappel < 24 h)
-#
-#  Parcours : bannière in-app → clients qui CLIQUENT → rappel du centre sous 24 h.
-#  Contrainte 24 h  ⇔  clics/jour <= capacité d'appel/jour du centre.
-#
-#  CŒUR : par centre, croiser les 2 variables
-#     capacité/mois = appels_jour × JOURS_MOIS        (clics appelables sous 24 h)
-#     injection_opt = capacité / taux_clic            (clients à injecter/mois)
-#  puis confronter injection_opt à l'ACQUISITION mensuelle du centre (soutenable ?).
-#
-#  (Les versions exploratoires précédentes — one-shot, répartition égale — restent
-#   dans l'historique git si besoin.)
-# ══════════════════════════════════════════════════════════════════════════
 
-# ─────────────────────────── CELLULE 0 · CHARGEMENT ─────────────────────────
-import pandas as pd, numpy as np, matplotlib.pyplot as plt
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
 
-FILE    = "clients_centres.xlsx"     # .xlsx / .csv / .parquet
-COL_ID  = "Identifiant Tiers"
-COL_CCI = "CCI"
+# Charger le fichier
+df = pd.read_excel("stock_clients.xlsx")
 
-if   FILE.endswith(".xlsx"):    df = pd.read_excel(FILE)
-elif FILE.endswith(".parquet"): df = pd.read_parquet(FILE)
-else:                           df = pd.read_csv(FILE)
-df = df.dropna(subset=[COL_ID, COL_CCI]).drop_duplicates([COL_ID])
-stock = (df.groupby(COL_CCI)[COL_ID].nunique().sort_values(ascending=False).rename("stock"))
-print(f"{stock.sum():,} clients · {len(stock)} centres")
-print(stock.to_string())
+# Adapter les noms de colonnes et la valeur du segment
+non_ma = df[df["segment"] == "NON_MA"].copy()
 
+avoirs = pd.to_numeric(non_ma["avoirs"], errors="coerce").dropna()
 
-# ────────────────── CELLULE 1 · DISTRIBUTION (stock par centre) ─────────────
-fig, ax = plt.subplots(figsize=(10, max(3, 0.5 * len(stock))))
-s2 = stock.iloc[::-1]
-ax.barh(s2.index.astype(str), s2.values, color="#1E6FA8")
-for i, v in enumerate(s2.values):
-    ax.text(v, i, f" {v:,}", va="center", fontsize=9)
-ax.set_title("Stock (clients rattachés) par centre")
-ax.set_xlabel("clients"); ax.set_ylabel("centre (CCI)")
-plt.tight_layout(); plt.show()
+# Statistiques générales
+print(f"Nombre de clients : {len(avoirs):,}")
+print(f"Avoirs moyens : {avoirs.mean():,.0f} €")
+print(f"Médiane : {avoirs.median():,.0f} €")
+print(f"Écart-type : {avoirs.std():,.0f} €")
+print(f"Minimum : {avoirs.min():,.0f} €")
+print(f"Maximum : {avoirs.max():,.0f} €")
+
+# Distribution par quantiles
+print("\nQuantiles :")
+print(avoirs.quantile([0.10, 0.25, 0.50, 0.75, 0.90, 0.95]))
+
+# Proportions au-dessus des seuils
+print("\nProportion de clients par seuil :")
+for seuil in [20000, 30000, 40000, 45000, 50000, 55000, 60000]:
+    pct = (avoirs >= seuil).mean() * 100
+    print(f">= {seuil:,} € : {pct:.2f} %")
 
 
-# ═══════════════ CELLULE 2 · CŒUR — INJECTION OPTIMALE PAR CENTRE ═══════════
-JOURS_MOIS = 20
-TAUX_CLIC  = [0.02, 0.03, 0.05, 0.07]     # scénarios de taux de clic
-TAUX_CIBLE = 0.05                         # hypothèse centrale pour la reco chiffrée
 
-# --- À REMPLIR : paramètres PAR CENTRE (dict {CCI: valeur}) -------------------
-# Astuce pour régénérer les clés :
-#   import pprint; pprint.pprint({str(c): None for c in stock.index})
-APPELS_JOUR = {str(c): 5    for c in stock.index}   # appels/jour par centre (max 5)
-ACQ_MOIS    = {str(c): None for c in stock.index}   # acquisitions/mois par centre  ← À REMPLIR
-
-apj  = pd.Series({c: APPELS_JOUR.get(str(c), np.nan) for c in stock.index}, dtype="float")
-acq  = pd.Series({c: ACQ_MOIS.get(str(c),   np.nan) for c in stock.index}, dtype="float")
-capm = apj * JOURS_MOIS                              # capacité mensuelle (clics appelables)
-
-# (1) CROSS-MATCH : injection optimale/mois par centre × taux de clic
-core = pd.DataFrame({"stock": stock, "appels_j": apj, "capacite_mois": capm, "acq_mois": acq})
-for r in TAUX_CLIC:
-    core[f"inj_{r:.0%}"] = (capm / r).round()       # = capacité / taux_clic
-core = core.sort_values("stock", ascending=False)
-cols1 = ["stock", "appels_j", "capacite_mois", "acq_mois"] + [f"inj_{r:.0%}" for r in TAUX_CLIC]
-print("(1) INJECTION OPTIMALE /centre/mois selon le taux de clic (= capacité / clic) :")
-print(core[cols1].to_string())
-
-# (2) au taux cible : reco bornée par l'acquisition (soutenabilité)
-core["inj_cible"]      = (capm / TAUX_CIBLE).round()
-core["inj_soutenable"] = np.minimum(core["inj_cible"], core["acq_mois"])
-core["deficit_mois"]   = (core["inj_cible"] - core["acq_mois"]).clip(lower=0)
-core["runway_mois"]    = np.where(core["deficit_mois"] > 0,
-                                  (core["stock"] / core["deficit_mois"]).round(1), np.nan)
-core["mois_ecoulement_stock"] = (core["stock"] / core["inj_cible"]).round(1)   # dépend du stock
-def _verdict(row):
-    if pd.isna(row["acq_mois"]):   return "acq. à renseigner"
-    if row["deficit_mois"] <= 0:   return "autosuffisant"
-    return f"acq. insuffisante — tient {row['runway_mois']:.0f} mois sur stock"
-core["verdict"] = core.apply(_verdict, axis=1)
-cols2 = ["stock", "acq_mois", "inj_cible", "inj_soutenable", "mois_ecoulement_stock",
-         "deficit_mois", "runway_mois", "verdict"]
-print(f"\n(2) RECO au taux cible {TAUX_CIBLE:.0%} — injection bornée par l'acquisition :")
-print(core[cols2].to_string())
-print("\n  inj_cible      = PLAFOND capacité (identique à capacité égale : le tel. est le goulot,")
-print("                   pas le stock — injecter selon le stock casserait le 24 h des gros centres)")
-print("  inj_soutenable = ce qu'on tient DURABLEMENT = min(idéale, acquisitions/mois)  ← dynamique/centre")
-print("  mois_ecoulement_stock = mois pour montrer la bannière à tout le stock (dépend du stock)")
-print("  runway_mois    = mois avant d'épuiser le stock si on injecte à l'idéale > acquisition")
-
-# Graphe : injection cible vs acquisition, par centre (nommé)
-fig, ax = plt.subplots(figsize=(10, max(3, 0.55 * len(core))))
-y = np.arange(len(core)); c2 = core.iloc[::-1]
-ax.barh(y - 0.2, c2["inj_cible"],  height=0.4, color="#1E6FA8", label="injection idéale")
-ax.barh(y + 0.2, c2["acq_mois"],   height=0.4, color="#0F8A5F", label="acquisition/mois")
-ax.set_yticks(y); ax.set_yticklabels(c2.index.astype(str))
-ax.set_xlabel("clients / mois"); ax.set_ylabel("centre (CCI)")
-ax.set_title(f"Injection idéale vs acquisition par centre (clic {TAUX_CIBLE:.0%}, "
-             f"jusqu'à {int(np.nanmax(apj))} appels/j)")
-ax.legend(); plt.tight_layout(); plt.show()
-# Export : core.to_csv("injection_optimale_par_centre.csv")
+xxxxxxxxxxxx
 
 
-# ─────────────── CELLULE 3 · RÉCAP MAIL — une phrase par centre ─────────────
-lignes = []
-for cci, row in core.iterrows():
-    ideal = int(row["inj_cible"]); stk = int(row["stock"]); a = row["acq_mois"]
-    if pd.isna(a):
-        lignes.append(f"• {cci} : injecter ~{ideal} clients/mois (idéal, clic {TAUX_CIBLE:.0%}, "
-                      f"{int(row['appels_j'])} appels/j). Soutenabilité à confirmer (acquisition non renseignée).")
-    elif row["deficit_mois"] <= 0:
-        lignes.append(f"• {cci} : injecter ~{ideal} clients/mois — AUTOSUFFISANT "
-                      f"(acquisition {int(a)}/mois couvre le besoin).")
-    else:
-        sout = int(row["inj_soutenable"]); rw = row["runway_mois"]
-        lignes.append(f"• {cci} : idéal {ideal}/mois mais acquisition seulement {int(a)}/mois → "
-                      f"soutenable ~{sout}/mois ; le stock de {stk:,} tient ~{rw:.0f} mois à l'idéal, "
-                      f"ensuite booster l'acquisition ou réallouer.")
-recap = "\n".join(lignes)
-print(f"════ RÉCAP (clic {TAUX_CIBLE:.0%}, rappel < 24 h) ════\n")
-print(recap)
-# Export : open("recap_mail.txt", "w", encoding="utf-8").write(recap)
+plt.figure(figsize=(11, 5))
+
+plt.hist(avoirs, bins=40, edgecolor="black", alpha=0.75)
+
+plt.axvline(avoirs.median(), color="green",
+            linestyle="--", label=f"Médiane : {avoirs.median():,.0f} €")
+
+plt.axvline(48917, color="orange",
+            linestyle="--", label="Moyenne non intéressés : 48 917 €")
+
+plt.axvline(62000, color="red",
+            linestyle="--", label="Seuil Mass Affluent : 62 000 €")
+
+plt.xlabel("Avoirs (€)")
+plt.ylabel("Nombre de clients")
+plt.title("Distribution des avoirs – Clients non-Mass Affluent")
+plt.legend()
+plt.tight_layout()
+plt.show()
+
+
+
+xxxxxxxxxxxx
+
+
+
+comparaison = pd.DataFrame({
+    "Indicateur": [
+        "Avoirs moyens",
+        "Avoirs médians",
+        "Part avec >= 40k€",
+        "Part avec >= 50k€",
+        "Part avec >= 55k€"
+    ],
+    "Non-Mass Affluent": [
+        f"{avoirs.mean():,.0f} €",
+        f"{avoirs.median():,.0f} €",
+        f"{(avoirs >= 40000).mean():.1%}",
+        f"{(avoirs >= 50000).mean():.1%}",
+        f"{(avoirs >= 55000).mean():.1%}"
+    ]
+})
+
+print(comparaison.to_string(index=False))
+
+
+
